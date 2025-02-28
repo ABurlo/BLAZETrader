@@ -55,24 +55,25 @@ class MultiPlotter:
                 buy_volumes.append(volume / 2)
                 sell_volumes.append(volume / 2)
 
-        # Create a 2x2 subplot grid for Slot 1 (TL) with custom row heights: 2/3 for OHLC, 1/3 for volume
+        # Create a 2x2 subplot grid with exact equal quadrants for high-DPI
         fig = make_subplots(rows=2, cols=2, 
                             specs=[[{'type': 'xy'}, {'type': 'xy'}],  # Top row: TL and TR
                                    [{'type': 'xy'}, {'type': 'xy'}]],  # Bottom row: BL and BR
                             subplot_titles=('Slot 1 (TL)', 'Slot 2 (TR)', 'Slot 4 (BL)', 'Slot 3 (BR)'),
-                            row_heights=[0.667, 0.333],  # 2/3 for OHLC, 1/3 for volume in Slot 1
-                            vertical_spacing=0.05,  # Tighter spacing for better fit
-                            shared_xaxes=True)  # Share x-axes across subplots in Slot 1
+                            row_heights=[0.5, 0.5],  # Equal height for rows (1/2 screen each)
+                            column_widths=[0.5, 0.5],  # Equal width for columns (1/2 screen each)
+                            vertical_spacing=0.05,  # Tighter vertical spacing
+                            horizontal_spacing=0.05)  # Tighter horizontal spacing
 
-        # Slot 1 (Top-Left): OHLC Candlestick (Top 2/3) and Volume (Bottom 1/3)
-        # OHLC Candlestick in the top 2/3 (row 1, col 1)
+        # Slot 1 (Top-Left): OHLC Candlestick (Top 2/3) and Volume (Bottom 1/3) within its quadrant
+        # OHLC Candlestick in the top 2/3 of Slot 1 (row 1, col 1, adjusted for 1/4 screen)
         fig.add_trace(
             go.Candlestick(x=dates, open=opens, high=highs, low=lows, close=closes, name='OHLC', 
                            increasing_line_color='green', decreasing_line_color='red'),
             row=1, col=1
         )
 
-        # Volume bars in the bottom 1/3 (row 2, col 1), with buy (green) and sell (red)
+        # Volume bars in the bottom 1/3 of Slot 1 (row 2, col 1, adjusted for 1/4 screen)
         fig.add_trace(
             go.Bar(x=dates, y=buy_volumes, name='Buy Volume', marker_color='green'),
             row=2, col=1
@@ -83,29 +84,26 @@ class MultiPlotter:
         )
 
         # Lock the x-axis range to the backtest period (start_dt to end_dt) for Slot 1
-        fig.update_xaxes(range=[start_dt, end_dt], row=1, col=1)  # OHLC x-axis
+        fig.update_xaxes(range=[start_dt, end_dt], row=1, col=1, showticklabels=False)  # OHLC x-axis
         fig.update_xaxes(range=[start_dt, end_dt], row=2, col=1, showticklabels=True)  # Volume x-axis with labels
 
-        # Hide x-axis labels for the OHLC subplot to avoid duplication
-        fig.update_xaxes(showticklabels=False, row=1, col=1)
+        # Adjust domains to ensure Slot 1 fits exactly in top-left quadrant (1/4 screen)
+        fig.update_yaxes(domain=[0.5, 1.0], title_text="Price", row=1, col=1)  # Top half of Slot 1 for OHLC
+        fig.update_yaxes(domain=[0.0, 0.5], title_text="Volume", row=2, col=1)  # Bottom half of Slot 1 for volume
 
-        # Adjust y-axis titles and margins to ensure clear separation
-        fig.update_yaxes(title_text="Price", row=1, col=1)
-        fig.update_yaxes(title_text="Volume", row=2, col=1)
-
-        # Slot 2 (Top-Right): Placeholder (e.g., empty plot or simple line)
+        # Slot 2 (Top-Right): Placeholder in top-right quadrant
         fig.add_trace(
             go.Scatter(x=[0, 1], y=[0, 1], mode='lines', name='Placeholder 2', line_color='gray'),
             row=1, col=2
         )
 
-        # Slot 3 (Bottom-Right): Placeholder (e.g., empty plot or simple line)
+        # Slot 3 (Bottom-Right): Placeholder in bottom-right quadrant
         fig.add_trace(
             go.Scatter(x=[0, 1], y=[0, 1], mode='lines', name='Placeholder 3', line_color='gray'),
             row=2, col=2
         )
 
-        # Slot 4 (Bottom-Left): Placeholder (e.g., empty plot or simple line)
+        # Slot 4 (Bottom-Left): Placeholder in bottom-left quadrant
         fig.add_trace(
             go.Scatter(x=[0, 1], y=[0, 1], mode='lines', name='Placeholder 4', line_color='gray'),
             row=2, col=1
@@ -113,6 +111,12 @@ class MultiPlotter:
 
         # Lock the x-axis range to the backtest period for Slot 4
         fig.update_xaxes(range=[start_dt, end_dt], row=2, col=1)
+
+        # Ensure Slots 2 and 3 are correctly positioned in their quadrants
+        fig.update_xaxes(range=[0, 1], row=1, col=2, showticklabels=False)  # Slot 2
+        fig.update_xaxes(range=[0, 1], row=2, col=2, showticklabels=False)  # Slot 3
+        fig.update_yaxes(range=[0, 1], row=1, col=2)  # Slot 2
+        fig.update_yaxes(range=[0, 1], row=2, col=2)  # Slot 3
 
         # Update layout for dark gray mode with dynamic sizing (1/4 of screen), accounting for high-DPI
         dark_gray = 'rgba(30,30,30,1)'  # Dark gray background (RGB: 30,30,30)
@@ -135,10 +139,10 @@ class MultiPlotter:
                 fig.update_yaxes(gridcolor='rgba(70,70,70,1)', zerolinecolor='rgba(70,70,70,1)', showgrid=True, color=text_color, row=i, col=j)
                 fig.update_xaxes(gridcolor='rgba(70,70,70,1)', zerolinecolor='rgba(70,70,70,1)', showgrid=True, color=text_color, row=i, col=j)
 
-        # Custom HTML with JavaScript to set 1/4 screen size per slot, accounting for high-DPI
+        # Custom HTML with JavaScript to set exact 1/4 screen size per slot, accounting for high-DPI and quadrants
         html_content = fig.to_html(include_plotlyjs='cdn', full_html=True)
 
-        # Inject JavaScript to dynamically size the plot to 1/4 of the screen, considering device pixel ratio
+        # Inject JavaScript to dynamically size and position each slot in its quadrant, considering device pixel ratio
         html_content = html_content.replace(
             '</head>',
             '''
@@ -149,21 +153,37 @@ class MultiPlotter:
                     const screenHeight = window.screen.height * window.devicePixelRatio;
                     
                     // Set plot size to 1/4 of screen (2x2 grid), adjusted for DPI
-                    const plotWidth = (screenWidth / 2) / window.devicePixelRatio;  // Half width for 2 columns, scaled down
-                    const plotHeight = (screenHeight / 2) / window.devicePixelRatio;  // Half height for 2 rows, scaled down
+                    const quadrantWidth = (screenWidth / 2) / window.devicePixelRatio;  // Half width for 2 columns, scaled down
+                    const quadrantHeight = (screenHeight / 2) / window.devicePixelRatio;  // Half height for 2 rows, scaled down
                     
-                    // Apply size to the div containing the plot
-                    document.getElementById('plot').style.width = plotWidth + 'px';
-                    document.getElementById('plot').style.height = plotHeight + 'px';
+                    // Apply size to the div containing the plot (full screen)
+                    document.getElementById('plot').style.width = screenWidth / window.devicePixelRatio + 'px';
+                    document.getElementById('plot').style.height = screenHeight / window.devicePixelRatio + 'px';
                     
-                    // Ensure each subplot (slot) takes full space within the plot div
+                    // Ensure each subplot (slot) is sized and positioned in its quadrant
                     const subplots = document.querySelectorAll('.subplot');
-                    subplots.forEach(subplot => {
-                        subplot.style.width = '100%';
-                        subplot.style.height = '100%';
+                    subplots.forEach((subplot, index) => {
+                        const row = Math.floor(index / 2) + 1;
+                        const col = (index % 2) + 1;
+                        subplot.style.width = quadrantWidth + 'px';
+                        subplot.style.height = quadrantHeight + 'px';
+                        subplot.style.position = 'absolute';
+                        if (row === 1 && col === 1) { // Slot 1 (Top-Left)
+                            subplot.style.top = '0';
+                            subplot.style.left = '0';
+                        } else if (row === 1 && col === 2) { // Slot 2 (Top-Right)
+                            subplot.style.top = '0';
+                            subplot.style.left = quadrantWidth + 'px';
+                        } else if (row === 2 && col === 1) { // Slot 4 (Bottom-Left)
+                            subplot.style.top = quadrantHeight + 'px';
+                            subplot.style.left = '0';
+                        } else if (row === 2 && col === 2) { // Slot 3 (Bottom-Right)
+                            subplot.style.top = quadrantHeight + 'px';
+                            subplot.style.left = quadrantWidth + 'px';
+                        }
                     });
                     
-                    // Position the plot div in the top-left (Slot 1)
+                    // Position the plot div in the top-left
                     document.getElementById('plot').style.position = 'absolute';
                     document.getElementById('plot').style.top = '0';
                     document.getElementById('plot').style.left = '0';
