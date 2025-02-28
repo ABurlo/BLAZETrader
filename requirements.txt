@@ -3,3 +3,4 @@ pandas
 pandas_ta
 plotly
 colorlog
+nest_asyncio

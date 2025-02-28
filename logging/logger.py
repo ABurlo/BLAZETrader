@@ -1,8 +1,12 @@
 import logging
+import os
 from colorlog import ColoredFormatter
 
 class TradingLogger:
     def __init__(self, log_dir="logs"):
+        # Ensure the log directory exists
+        os.makedirs(log_dir, exist_ok=True)
+        
         self.global_logger = self._setup_logger("global", f"{log_dir}/global.log", "green")
         self.error_logger = self._setup_logger("error", f"{log_dir}/errors.log", "red")
         self.trade_logger = self._setup_logger("trade", f"{log_dir}/trades.log", "blue")
