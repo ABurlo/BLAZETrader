@@ -1,14 +1,18 @@
-from ib_insync import IB, BarDataList
+from ib_insync import IB, Stock, BarDataList, RealTimeBar
 import pandas as pd
 from src.config import Config
+from src.logging.logger import TradingLogger
 
 class DataManager:
     def __init__(self):
         self.ib = IB()
-        self.ib.connect('127.0.0.1', 7497, clientId=1)  # Adjust port as needed
+        self.ib.connect('127.0.0.1', 7497, clientId=1)
+        self.logger = TradingLogger()
+        self.data_cache = {}
         
     def fetch_historical_data(self, symbol, start_date, end_date, timeframe="1 day"):
         contract = Stock(symbol, 'SMART', 'USD')
+        self.ib.qualifyContracts(contract)
         bars = self.ib.reqHistoricalData(
             contract,
             endDateTime=end_date,
@@ -18,7 +22,22 @@ class DataManager:
             useRTH=True,
             formatDate=1
         )
-        return self._bars_to_df(bars)
+        df = self._bars_to_df(bars)
+        self.data_cache[symbol] = df
+        self.logger.global_logger.info(f"Fetched historical data for {symbol}")
+        return df
+    
+    def req_real_time_bars(self, symbol, callback):
+        contract = Stock(symbol, 'SMART', 'USD')
+        self.ib.qualifyContracts(contract)
+        self.ib.reqRealTimeBars(
+            contract,
+            5,  # 5-second bars
+            'TRADES',
+            True,
+            callback=callback
+        )
+        self.logger.global_logger.info(f"Subscribed to real-time bars for {symbol}")
     
     def _bars_to_df(self, bars: BarDataList) -> pd.DataFrame:
         return pd.DataFrame({
