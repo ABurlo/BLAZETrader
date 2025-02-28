@@ -1,0 +1,18 @@
+[32m2025-02-28 20:38:04,430 | global | INFO | Connected to IBKR[0m
+[32m2025-02-28 20:38:04,430 | global | INFO | Connected to IBKR[0m
+[32m2025-02-28 20:38:10,130 | global | INFO | Fetched historical data for msft[0m
+[32m2025-02-28 20:38:10,130 | global | INFO | Fetched historical data for msft[0m
+[32m2025-02-28 20:38:10,434 | global | INFO | Backtest completed. PNL: $0.00[0m
+[32m2025-02-28 20:38:10,434 | global | INFO | Backtest completed. PNL: $0.00[0m
+[32m2025-02-28 20:39:42,583 | global | INFO | Connected to IBKR[0m
+[32m2025-02-28 20:39:42,583 | global | INFO | Connected to IBKR[0m
+[32m2025-02-28 20:39:56,742 | global | INFO | Fetched historical data for msft[0m
+[32m2025-02-28 20:39:56,742 | global | INFO | Fetched historical data for msft[0m
+[32m2025-02-28 20:39:57,054 | global | INFO | Backtest completed. PNL: $0.00[0m
+[32m2025-02-28 20:39:57,054 | global | INFO | Backtest completed. PNL: $0.00[0m
+[32m2025-02-28 20:41:29,101 | global | INFO | Connected to IBKR[0m
+[32m2025-02-28 20:41:29,101 | global | INFO | Connected to IBKR[0m
+[32m2025-02-28 20:41:36,446 | global | INFO | Fetched historical data for NKE[0m
+[32m2025-02-28 20:41:36,446 | global | INFO | Fetched historical data for NKE[0m
+[32m2025-02-28 20:41:36,731 | global | INFO | Backtest completed. PNL: $0.00[0m
+[32m2025-02-28 20:41:36,731 | global | INFO | Backtest completed. PNL: $0.00[0m
