@@ -3,8 +3,6 @@ from plotly.subplots import make_subplots
 import pandas as pd
 from datetime import datetime
 import webbrowser
-import os
-import time
 
 class MultiPlotter:
     def create_dashboard(self, df, symbol, start_date, end_date, pnl):
@@ -15,25 +13,38 @@ class MultiPlotter:
         
         Args:
             df (pd.DataFrame): DataFrame with columns 'date', 'open', 'high', 'low', 'close', 'volume'
-            symbol (str): The ticker symbol (e.g., 'AMZN') for the chart title.
-            start_date (str): Start date in 'DD/MM/YYYY' format.
-            end_date (str): End date in 'DD/MM/YYYY' format.
+            symbol (str): The ticker symbol (e.g., 'MSFT') for the chart title.
+            start_date (str or datetime): Start date in 'DD/MM/YYYY' format or datetime object.
+            end_date (str or datetime): End date in 'DD/MM/YYYY' format or datetime object.
             pnl (float): Profit and Loss value for the chart title.
         """
         # Ensure data is in the correct format
-        if not isinstance(df, pd.DataFrame):
+        if not isinstance(df, pd.DataFrame) or not all(col in df.columns for col in ['date', 'open', 'high', 'low', 'close', 'volume']):
             raise ValueError("Data must be a pandas DataFrame with columns 'date', 'open', 'high', 'low', 'close', 'volume'")
         
         # Convert date strings to datetime if not already
         if not pd.api.types.is_datetime64_any_dtype(df['date']):
             df['date'] = pd.to_datetime(df['date'], format='%d/%m/%Y')
 
-        # Filter data to match the backtest period (start_date to end_date)
-        start_dt = pd.to_datetime(start_date, format='%d/%m/%Y')
-        end_dt = pd.to_datetime(end_date, format='%d/%m/%Y')
-        df = df[(df['date'] >= start_dt) & (df['date'] <= end_dt)].copy()
+        # Handle start_date and end_date (convert to datetime if strings, or use as-is if already datetime)
+        if isinstance(start_date, str):
+            start_dt = datetime.strptime(start_date, '%d/%m/%Y')
+        else:
+            start_dt = start_date
 
-        # Extract data for the financial chart
+        if isinstance(end_date, str):
+            end_dt = datetime.strptime(end_date, '%d/%m/%Y')
+        else:
+            end_dt = end_date
+
+        # Filter the DataFrame to only include data within the backtest period
+        df = df[(df['date'] >= start_dt) & (df['date'] <= end_dt)]
+
+        # Check if the filtered DataFrame is empty
+        if df.empty:
+            raise ValueError(f"No data available for the period {start_date} to {end_date}")
+
+        # Extract data for the financial chart (only within the backtest period)
         dates = df['date'].dt.to_pydatetime()
         opens = df['open'].values
         highs = df['high'].values
@@ -55,70 +66,51 @@ class MultiPlotter:
                 buy_volumes.append(volume / 2)
                 sell_volumes.append(volume / 2)
 
-        # Create a 2x2 subplot grid with exact equal quadrants for high-DPI
+        # Create a 2x2 subplot grid with custom row heights
+        # Allocate 60% of the height to row 1 (for Slot 1 and Slot 2, including volume in Slot 1)
+        # Allocate 40% of the height to row 2 (split evenly between Slot 3 and Slot 4)
         fig = make_subplots(rows=2, cols=2, 
-                            specs=[[{'type': 'xy'}, {'type': 'xy'}],  # Top row: TL and TR
-                                   [{'type': 'xy'}, {'type': 'xy'}]],  # Bottom row: BL and BR
-                            subplot_titles=('Slot 1 (TL)', 'Slot 2 (TR)', 'Slot 4 (BL)', 'Slot 3 (BR)'),
-                            row_heights=[0.5, 0.5],  # Equal height for rows (1/2 screen each)
-                            column_widths=[0.5, 0.5],  # Equal width for columns (1/2 screen each)
-                            vertical_spacing=0.05,  # Tighter vertical spacing
-                            horizontal_spacing=0.05)  # Tighter horizontal spacing
+                            specs=[[{'type': 'xy'}, {'type': 'xy'}],
+                                   [{'type': 'xy'}, {'type': 'xy'}]],
+                            subplot_titles=('Slot 1 (TL)', 'Slot 2 (TR)', 'Slot 3 (BR)', 'Slot 4 (BL)'),
+                            row_heights=[0.6, 0.4],  # 60% for row 1, 40% for row 2
+                            vertical_spacing=0.1,  # Adjust vertical spacing to prevent overlap
+                            horizontal_spacing=0.1)  # Adjust horizontal spacing for better layout
 
-        # Slot 1 (Top-Left): OHLC Candlestick (Top 2/3) and Volume (Bottom 1/3) within its quadrant
-        # OHLC Candlestick in the top 2/3 of Slot 1 (row 1, col 1, adjusted for 1/4 screen)
+        # Slot 1 (Top-Left): OHLC Candles with Volume on secondary y-axis (stacked vertically)
         fig.add_trace(
             go.Candlestick(x=dates, open=opens, high=highs, low=lows, close=closes, name='OHLC', 
                            increasing_line_color='green', decreasing_line_color='red'),
             row=1, col=1
         )
-
-        # Volume bars in the bottom 1/3 of Slot 1 (row 2, col 1, adjusted for 1/4 screen)
         fig.add_trace(
-            go.Bar(x=dates, y=buy_volumes, name='Buy Volume', marker_color='green'),
-            row=2, col=1
+            go.Bar(x=dates, y=buy_volumes, name='Buy Volume', marker_color='green', yaxis='y2'),
+            row=1, col=1
         )
         fig.add_trace(
-            go.Bar(x=dates, y=sell_volumes, name='Sell Volume', marker_color='red'),
-            row=2, col=1
+            go.Bar(x=dates, y=sell_volumes, name='Sell Volume', marker_color='red', yaxis='y2'),
+            row=1, col=1
         )
 
-        # Lock the x-axis range to the backtest period (start_dt to end_dt) for Slot 1
-        fig.update_xaxes(range=[start_dt, end_dt], row=1, col=1, showticklabels=False)  # OHLC x-axis
-        fig.update_xaxes(range=[start_dt, end_dt], row=2, col=1, showticklabels=True)  # Volume x-axis with labels
-
-        # Adjust domains to ensure Slot 1 fits exactly in top-left quadrant (1/4 screen)
-        fig.update_yaxes(domain=[0.5, 1.0], title_text="Price", row=1, col=1)  # Top half of Slot 1 for OHLC
-        fig.update_yaxes(domain=[0.0, 0.5], title_text="Volume", row=2, col=1)  # Bottom half of Slot 1 for volume
-
-        # Slot 2 (Top-Right): Placeholder in top-right quadrant
+        # Slot 2 (Top-Right): Placeholder (e.g., empty plot or simple line)
         fig.add_trace(
             go.Scatter(x=[0, 1], y=[0, 1], mode='lines', name='Placeholder 2', line_color='gray'),
             row=1, col=2
         )
 
-        # Slot 3 (Bottom-Right): Placeholder in bottom-right quadrant
+        # Slot 3 (Bottom-Right): Placeholder starting at y=0 (e.g., empty plot or simple line starting at zero)
         fig.add_trace(
             go.Scatter(x=[0, 1], y=[0, 1], mode='lines', name='Placeholder 3', line_color='gray'),
             row=2, col=2
         )
 
-        # Slot 4 (Bottom-Left): Placeholder in bottom-left quadrant
+        # Slot 4 (Bottom-Left): Placeholder starting at y=0 (e.g., empty plot or simple line starting at zero)
         fig.add_trace(
             go.Scatter(x=[0, 1], y=[0, 1], mode='lines', name='Placeholder 4', line_color='gray'),
             row=2, col=1
         )
 
-        # Lock the x-axis range to the backtest period for Slot 4
-        fig.update_xaxes(range=[start_dt, end_dt], row=2, col=1)
-
-        # Ensure Slots 2 and 3 are correctly positioned in their quadrants
-        fig.update_xaxes(range=[0, 1], row=1, col=2, showticklabels=False)  # Slot 2
-        fig.update_xaxes(range=[0, 1], row=2, col=2, showticklabels=False)  # Slot 3
-        fig.update_yaxes(range=[0, 1], row=1, col=2)  # Slot 2
-        fig.update_yaxes(range=[0, 1], row=2, col=2)  # Slot 3
-
-        # Update layout for dark gray mode with dynamic sizing (1/4 of screen), accounting for high-DPI
+        # Update layout for dark gray mode with dynamic sizing (1/4 of screen)
         dark_gray = 'rgba(30,30,30,1)'  # Dark gray background (RGB: 30,30,30)
         light_gray = 'rgba(50,50,50,1)'  # Slightly lighter gray for contrast
         text_color = 'rgba(200,200,200,1)'  # Light gray text for contrast
@@ -129,98 +121,87 @@ class MultiPlotter:
             plot_bgcolor=light_gray,  # Slightly lighter gray for plot area
             font_color=text_color,  # Light gray text for contrast
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, bgcolor=dark_gray, font_color=text_color),
-            margin=dict(l=50, r=50, t=80, b=50),  # Adjust margins for better fit on high-DPI
-            # No fixed width/height here; handled by HTML/JavaScript
+            height=800,  # Set a reasonable height to allow scrolling if content exceeds screen size
+            yaxis2=dict(overlaying='y', side='right', title='Volume', showgrid=False)  # Secondary y-axis for volume
         )
 
-        # Update axes for dark gray mode and ensure proper alignment
+        # Update axes for dark gray mode, ensure Slot 3 and 4 start at y=0
         for i in range(1, 3):
             for j in range(1, 3):
-                fig.update_yaxes(gridcolor='rgba(70,70,70,1)', zerolinecolor='rgba(70,70,70,1)', showgrid=True, color=text_color, row=i, col=j)
-                fig.update_xaxes(gridcolor='rgba(70,70,70,1)', zerolinecolor='rgba(70,70,70,1)', showgrid=True, color=text_color, row=i, col=j)
+                fig.update_xaxes(
+                    gridcolor='rgba(70,70,70,1)', 
+                    zerolinecolor='rgba(70,70,70,1)', 
+                    showgrid=True, 
+                    color=text_color, 
+                    row=i, 
+                    col=j
+                )
+                fig.update_yaxes(
+                    gridcolor='rgba(70,70,70,1)', 
+                    zerolinecolor='rgba(70,70,70,1)', 
+                    showgrid=True, 
+                    color=text_color, 
+                    range=[0, None] if i == 2 else None,  # Force y-axis to start at 0 for rows 2 (Slot 3 and 4)
+                    row=i, 
+                    col=j
+                )
 
-        # Custom HTML with JavaScript to set exact 1/4 screen size per slot, accounting for high-DPI and quadrants
+        # Custom HTML with JavaScript to set 1/4 screen size per slot, allow scrolling
         html_content = fig.to_html(include_plotlyjs='cdn', full_html=True)
 
-        # Inject JavaScript to dynamically size and position each slot in its quadrant, considering device pixel ratio
+        # Inject JavaScript to dynamically size the plot to 1/4 of the screen and enable scrolling if needed
         html_content = html_content.replace(
             '</head>',
             '''
             <script>
                 window.onload = function() {
-                    // Get screen dimensions and device pixel ratio for high-DPI (e.g., Retina displays)
-                    const screenWidth = window.screen.width * window.devicePixelRatio;
-                    const screenHeight = window.screen.height * window.devicePixelRatio;
+                    // Get screen dimensions
+                    const screenWidth = window.screen.width;
+                    const screenHeight = window.screen.height;
                     
-                    // Set plot size to 1/4 of screen (2x2 grid), adjusted for DPI
-                    const quadrantWidth = (screenWidth / 2) / window.devicePixelRatio;  // Half width for 2 columns, scaled down
-                    const quadrantHeight = (screenHeight / 2) / window.devicePixelRatio;  // Half height for 2 rows, scaled down
+                    // Set plot size to 1/4 of screen (2x2 grid)
+                    const plotWidth = screenWidth / 2;  // Half width for 2 columns
+                    const plotHeight = screenHeight / 2;  // Half height for 2 rows
                     
-                    // Apply size to the div containing the plot (full screen)
-                    document.getElementById('plot').style.width = screenWidth / window.devicePixelRatio + 'px';
-                    document.getElementById('plot').style.height = screenHeight / window.devicePixelRatio + 'px';
+                    // Apply size to the div containing the plot
+                    const plotDiv = document.getElementById('plot');
+                    plotDiv.style.width = plotWidth + 'px';
+                    plotDiv.style.height = plotHeight + 'px';
+                    plotDiv.style.overflow = 'auto';  // Allow scrolling if content exceeds size
                     
-                    // Ensure each subplot (slot) is sized and positioned in its quadrant
+                    // Ensure each subplot (slot) takes full space within the plot div
                     const subplots = document.querySelectorAll('.subplot');
-                    subplots.forEach((subplot, index) => {
-                        const row = Math.floor(index / 2) + 1;
-                        const col = (index % 2) + 1;
-                        subplot.style.width = quadrantWidth + 'px';
-                        subplot.style.height = quadrantHeight + 'px';
-                        subplot.style.position = 'absolute';
-                        if (row === 1 && col === 1) { // Slot 1 (Top-Left)
-                            subplot.style.top = '0';
-                            subplot.style.left = '0';
-                        } else if (row === 1 && col === 2) { // Slot 2 (Top-Right)
-                            subplot.style.top = '0';
-                            subplot.style.left = quadrantWidth + 'px';
-                        } else if (row === 2 && col === 1) { // Slot 4 (Bottom-Left)
-                            subplot.style.top = quadrantHeight + 'px';
-                            subplot.style.left = '0';
-                        } else if (row === 2 && col === 2) { // Slot 3 (Bottom-Right)
-                            subplot.style.top = quadrantHeight + 'px';
-                            subplot.style.left = quadrantWidth + 'px';
-                        }
+                    subplots.forEach(subplot => {
+                        subplot.style.width = '100%';
+                        subplot.style.height = '100%';
                     });
                     
-                    // Position the plot div in the top-left
-                    document.getElementById('plot').style.position = 'absolute';
-                    document.getElementById('plot').style.top = '0';
-                    document.getElementById('plot').style.left = '0';
+                    // Position the plot div in the top-left (Slot 1)
+                    plotDiv.style.position = 'absolute';
+                    plotDiv.style.top = '0';
+                    plotDiv.style.left = '0';
                 };
             </script>
             </head>
             '''
         )
 
-        # Generate the filename
-        filename = f"dashboard_{symbol}_{start_date}_{end_date}.html"
-        
-        # Save the custom HTML
-        with open(filename, "w") as f:
+        # Save the custom HTML and open in a new browser window
+        with open(f"dashboard_{symbol}_{start_date}_{end_date}.html", "w") as f:
             f.write(html_content)
 
-        # Wait briefly to ensure the file is fully written
-        time.sleep(0.5)
+        # Open the HTML file in a new browser window
+        webbrowser.open(f"dashboard_{symbol}_{start_date}_{end_date}.html", new=2)  # new=2 opens in a new tab
 
-        # Check if the file exists and open it automatically in the default web browser
-        if os.path.exists(filename):
-            webbrowser.open(filename, new=2)  # new=2 opens in a new tab
-        else:
-            print(f"Error: Could not find file {filename} to open.")
-
-# Example usage for testing (commented out)
-"""
+# Example usage
 if __name__ == "__main__":
-    # Sample data for testing
-    sample_data = pd.DataFrame({
-        'date': pd.date_range(start='2024-01-01', end='2024-12-31', freq='D'),
-        'open': [350.0] * 365,  # Example data for AMZN
-        'high': [450.0] * 365,
-        'low': [340.0] * 365,
-        'close': [400.0] * 365,
-        'volume': [20000000] * 365
+    df = pd.DataFrame({
+        'date': ['01/01/2025', '02/01/2025', '03/01/2025'],
+        'open': [100, 102, 101],
+        'high': [103, 104, 102],
+        'low': [99, 100, 99],
+        'close': [102, 101, 100],
+        'volume': [1000, 1500, 1200]
     })
-    multi_plotter = MultiPlotter()
-    multi_plotter.create_dashboard(sample_data, 'AMZN', '01/01/2024', '31/12/2024', 0.00)
-"""
+    plotter = MultiPlotter()
+    plotter.create_dashboard(df, 'MSFT', '01/01/2025', '03/01/2025', 500.25)
