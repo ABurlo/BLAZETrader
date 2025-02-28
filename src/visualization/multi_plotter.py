@@ -73,8 +73,8 @@ class MultiPlotter:
                             specs=[[{'type': 'xy'}, {'type': 'xy'}],
                                    [{'type': 'xy'}, {'type': 'xy'}]],
                             subplot_titles=('Slot 1 (TL)', 'Slot 2 (TR)', 'Slot 3 (BR)', 'Slot 4 (BL)'),
-                            row_heights=[0.6, 0.4],  # 60% for row 1, 40% for row 2
-                            vertical_spacing=0.1,  # Adjust vertical spacing to prevent overlap
+                            row_heights=[0.35, 0.65],  # 60% for row 1, 40% for row 2
+                            vertical_spacing=0.5,  # Adjust vertical spacing to prevent overlap
                             horizontal_spacing=0.1)  # Adjust horizontal spacing for better layout
 
         # Slot 1 (Top-Left): OHLC Candles with Volume on secondary y-axis (stacked vertically)
