@@ -1,4 +1,5 @@
 from src.plugins.base_plugin import BasePlugin
+import pandas as pd
 import pandas_ta as ta
 
 class RSIPlugin(BasePlugin):
@@ -8,7 +9,7 @@ class RSIPlugin(BasePlugin):
         if rsi is not None and not rsi.empty:
             return {
                 'rsi': rsi.iloc[-1],
-                'buy_signal': rsi.iloc[-1] < 30,  # Oversold
-                'sell_signal': rsi.iloc[-1] > 70  # Overbought
+                'buy_signal': rsi.iloc[-1] < 30,
+                'sell_signal': rsi.iloc[-1] > 70
             }
         return {}

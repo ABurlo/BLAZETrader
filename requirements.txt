@@ -1,5 +1,5 @@
 ib_insync
 pandas
-pandas_ta  # For technical indicators
+pandas_ta
 plotly
 colorlog

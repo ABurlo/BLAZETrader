@@ -6,10 +6,13 @@ from src.logging.logger import TradingLogger
 class DataManager:
     def __init__(self):
         self.ib = IB()
-        self.ib.connect('127.0.0.1', 7497, clientId=1)
         self.logger = TradingLogger()
         self.data_cache = {}
-        
+    
+    async def connect(self):
+        await self.ib.connectAsync('127.0.0.1', 7497, clientId=1)
+        self.logger.global_logger.info("Connected to IBKR")
+    
     def fetch_historical_data(self, symbol, start_date, end_date, timeframe="1 day"):
         contract = Stock(symbol, 'SMART', 'USD')
         self.ib.qualifyContracts(contract)

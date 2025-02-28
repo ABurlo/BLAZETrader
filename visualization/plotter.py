@@ -1,11 +1,9 @@
 import plotly.graph_objects as go
-from src.config import Config
 
 class Plotter:
     def plot_ohlc(self, df, symbol, start_date, end_date, pnl):
         fig = go.Figure()
         
-        # OHLC Candlestick
         fig.add_trace(go.Candlestick(
             x=df['date'],
             open=df['open'],
@@ -15,7 +13,6 @@ class Plotter:
             name='OHLC'
         ))
         
-        # Volume
         fig.add_trace(go.Bar(
             x=df['date'],
             y=df['volume'],

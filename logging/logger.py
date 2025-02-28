@@ -25,6 +25,3 @@ class TradingLogger:
         logger.addHandler(ch)
         
         return logger
-    
-    def log_trade(self, msg):
-        self.trade_logger.info(msg)

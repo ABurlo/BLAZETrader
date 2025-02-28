@@ -1,4 +1,5 @@
 from src.plugins.base_plugin import BasePlugin
+import pandas as pd
 import pandas_ta as ta
 
 class MACDPlugin(BasePlugin):
