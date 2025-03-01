@@ -3,6 +3,7 @@
 from ib_insync import IB, Stock, BarDataList, RealTimeBar
 import pandas as pd
 import asyncio
+import os
 from src.config.config import Config
 from src.logging.logger import TradingLogger
 
@@ -11,9 +12,20 @@ class DataManager:
         self.ib = IB()
         self.logger = TradingLogger()
         self.data_cache = {}
+        self._loop = None  # Store the event loop for consistency
     
     async def connect(self):
         try:
+            # Use the current running loop, prioritizing Jupyter's loop
+            self._loop = asyncio.get_running_loop()
+            if self._loop is None or not self._loop.is_running():
+                if 'jupyter' in os.environ.get('JPY_PARENT_PID', ''):
+                    self.logger.global_logger.info("Using Jupyter notebook event loop for IBKR connection...")
+                    self._loop = asyncio.get_event_loop()
+                else:
+                    self.logger.global_logger.info("Creating new event loop for IBKR connection...")
+                    self._loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(self._loop)
             await self.ib.connectAsync('127.0.0.1', 7497, clientId=1)
             self.logger.global_logger.info("Connected to IBKR")
         except Exception as e:
@@ -32,7 +44,10 @@ class DataManager:
             contract = Stock(symbol, 'SMART', 'USD')
             self.ib.qualifyContracts(contract)
 
-            # Use ib_insync's async method for historical data
+            # Use ib_insync's async method for historical data with the current loop
+            if self._loop is None:
+                self._loop = asyncio.get_running_loop() or asyncio.new_event_loop()
+            
             bars = await self.ib.reqHistoricalDataAsync(
                 contract,
                 endDateTime=end_date,
@@ -91,5 +106,8 @@ class DataManager:
         try:
             self.ib.disconnect()
             self.logger.global_logger.info("Disconnected from IBKR")
+            if self._loop and not self._loop.is_closed():
+                self._loop.close()
+                self.logger.global_logger.info("Event loop closed after disconnection.")
         except Exception as e:
             self.logger.global_logger.error(f"Error disconnecting from IBKR: {str(e)}")

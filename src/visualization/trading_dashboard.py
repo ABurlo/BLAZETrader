@@ -7,7 +7,7 @@ from datetime import datetime
 import webbrowser
 import numpy as np
 import os
-import asyncio  # Added import for asyncio
+import asyncio
 from src.data.data_manager import DataManager
 from src.logging.logger import TradingLogger
 
@@ -24,19 +24,30 @@ class TradingDashboard:
         self.pane_configs = {}  # Store pane configurations (type, data, etc.)
         self.data_manager = DataManager()  # Initialize DataManager
         self.logger = TradingLogger()
+        self._loop = None  # Store the event loop for consistency
 
     async def connect_to_ibkr(self):
         """Asynchronously connect to IBKR using DataManager."""
         try:
+            # Use the current running loop, prioritizing Jupyter's loop
+            self._loop = asyncio.get_running_loop()
+            if self._loop is None or not self._loop.is_running():
+                if 'jupyter' in os.environ.get('JPY_PARENT_PID', ''):
+                    self.logger.global_logger.info("Using Jupyter notebook event loop for IBKR connection...")
+                    self._loop = asyncio.get_event_loop()
+                else:
+                    self.logger.global_logger.info("Creating new event loop for IBKR connection...")
+                    self._loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(self._loop)
             await self.data_manager.connect()
             self.logger.global_logger.info("Connected to IBKR via DataManager.")
         except Exception as e:
             self.logger.global_logger.error(f"Error connecting to IBKR: {str(e)}")
             raise
 
-    def add_pane(self, slot, pane_type, df=None, symbol=None, start_date=None, end_date=None, title=None, **kwargs):
+    async def add_pane(self, slot, pane_type, df=None, symbol=None, start_date=None, end_date=None, title=None, **kwargs):
         """
-        Add a pane (e.g., OHLC, Volume, Placeholder) to a specific slot in the 2x2 grid.
+        Asynchronously add a pane (e.g., OHLC, Volume, Placeholder) to a specific slot in the 2x2 grid.
         If no DataFrame is provided, fetch data from IBKR using DataManager.
         
         Args:
@@ -55,7 +66,7 @@ class TradingDashboard:
         # Fetch data from IBKR if no DataFrame is provided (use async method)
         if df is None and (symbol and start_date and end_date):
             if not self.data_manager.ib.isConnected():
-                raise ConnectionError("Not connected to IBKR. Call connect_to_ibkr() first.")
+                await self.connect_to_ibkr()
             # Convert dates to datetime for IBKR
             if isinstance(start_date, str):
                 start_dt = datetime.strptime(start_date, '%d/%m/%Y')
@@ -65,28 +76,17 @@ class TradingDashboard:
                 end_dt = datetime.strptime(end_date, '%d/%m/%Y')
             else:
                 end_dt = end_date
-            # Use the async method to fetch data, handling the event loop
+            # Use the async method to fetch data with the same loop
             try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # If loop is running, use ensure_future to schedule the task
-                    task = asyncio.ensure_future(self.data_manager.fetch_historical_data_async(symbol, start_dt, end_dt))
-                    df = loop.run_until_complete(task)
-                else:
-                    # If no loop is running, run the coroutine directly
-                    df = loop.run_until_complete(self.data_manager.fetch_historical_data_async(symbol, start_dt, end_dt))
+                if self._loop is None:
+                    self._loop = asyncio.get_running_loop() or asyncio.new_event_loop()
+                df = await self.data_manager.fetch_historical_data_async(symbol, start_dt, end_dt)
                 if df.empty:
                     self.logger.global_logger.error(f"No data fetched for {symbol} from {start_dt} to {end_dt}")
                     return
-            except RuntimeError as e:
-                self.logger.global_logger.error(f"Error fetching data due to event loop issue: {str(e)}")
-                # Fallback: Try creating a new loop if necessary
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                df = loop.run_until_complete(self.data_manager.fetch_historical_data_async(symbol, start_dt, end_dt))
-                if df.empty:
-                    self.logger.global_logger.error(f"No data fetched for {symbol} after fallback")
-                    return
+            except Exception as e:
+                self.logger.global_logger.error(f"Error fetching data for {symbol}: {str(e)}")
+                return
         elif df is None:
             raise ValueError("Either provide a DataFrame or symbol, start_date, and end_date.")
 
@@ -341,5 +341,8 @@ class TradingDashboard:
         try:
             self.data_manager.disconnect()
             self.logger.global_logger.info("Disconnected from IBKR via DataManager.")
+            if self._loop and not self._loop.is_closed():
+                self._loop.close()
+                self.logger.global_logger.info("Event loop closed after disconnection.")
         except Exception as e:
             self.logger.global_logger.error(f"Error disconnecting from IBKR: {str(e)}")
