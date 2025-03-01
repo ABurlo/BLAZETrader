@@ -36,7 +36,7 @@ async def main():
         end_dt = datetime.strptime(end_date, '%d/%m/%Y')
         
         logger.global_logger.info(f"Fetching historical data for {symbol}...")
-        df = data_manager.fetch_historical_data(symbol, start_dt, end_dt)
+        df = await data_manager.fetch_historical_data_async(symbol, start_dt, end_dt)
         logger.global_logger.info(f"Data fetched for {symbol}: {df.shape if not df.empty else 'Empty DataFrame'} rows.")
 
         if df.empty:
@@ -70,19 +70,32 @@ async def main():
 def run_main():
     """Run the main coroutine, handling the event loop appropriately."""
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            logger.global_logger.info("Event loop already running, scheduling main()...")
-            asyncio.ensure_future(main())
-        else:
+        # Get the running event loop or create a new one
+        try:
+            loop = asyncio.get_running_loop()
+            logger.global_logger.info("Using existing event loop...")
+            # If a loop is already running (e.g., in Jupyter or IDE), schedule main() in it
+            task = asyncio.ensure_future(main())
+            # Keep the loop running until the task is done
+            loop.run_until_complete(task)
+        except RuntimeError:  # No running loop, create and run a new one
             logger.global_logger.info("Starting new event loop for main()...")
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
             loop.run_until_complete(main())
     except RuntimeError as e:
         logger.global_logger.error(f"Error in event loop: {str(e)}")
-        # Fallback: Create a new event loop if necessary
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(main())
+        # Fallback: Try to run in the current context or create a new loop
+        try:
+            # Attempt to run in the current context (e.g., Jupyter)
+            task = asyncio.ensure_future(main())
+            loop = asyncio.get_event_loop()
+            loop.run_until_complete(task)
+        except RuntimeError:
+            logger.global_logger.warning("Falling back to new event loop creation...")
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(main())
     finally:
         # Only close the loop if it's not running and there are no pending tasks
         loop = asyncio.get_event_loop()

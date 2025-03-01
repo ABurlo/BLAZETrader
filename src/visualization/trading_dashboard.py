@@ -7,6 +7,7 @@ from datetime import datetime
 import webbrowser
 import numpy as np
 import os
+import asyncio  # Added import for asyncio
 from src.data.data_manager import DataManager
 from src.logging.logger import TradingLogger
 
@@ -51,7 +52,7 @@ class TradingDashboard:
         if slot not in self.slots:
             raise ValueError(f"Invalid slot: {slot}. Use 'TL', 'TR', 'BR', or 'BL'.")
         
-        # Fetch data from IBKR if no DataFrame is provided
+        # Fetch data from IBKR if no DataFrame is provided (use async method)
         if df is None and (symbol and start_date and end_date):
             if not self.data_manager.ib.isConnected():
                 raise ConnectionError("Not connected to IBKR. Call connect_to_ibkr() first.")
@@ -64,10 +65,28 @@ class TradingDashboard:
                 end_dt = datetime.strptime(end_date, '%d/%m/%Y')
             else:
                 end_dt = end_date
-            df = self.data_manager.fetch_historical_data(symbol, start_dt, end_dt, timeframe="1 day")
-            if df.empty:
-                self.logger.global_logger.error(f"No data fetched for {symbol} from {start_dt} to {end_dt}")
-                return
+            # Use the async method to fetch data, handling the event loop
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # If loop is running, use ensure_future to schedule the task
+                    task = asyncio.ensure_future(self.data_manager.fetch_historical_data_async(symbol, start_dt, end_dt))
+                    df = loop.run_until_complete(task)
+                else:
+                    # If no loop is running, run the coroutine directly
+                    df = loop.run_until_complete(self.data_manager.fetch_historical_data_async(symbol, start_dt, end_dt))
+                if df.empty:
+                    self.logger.global_logger.error(f"No data fetched for {symbol} from {start_dt} to {end_dt}")
+                    return
+            except RuntimeError as e:
+                self.logger.global_logger.error(f"Error fetching data due to event loop issue: {str(e)}")
+                # Fallback: Try creating a new loop if necessary
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                df = loop.run_until_complete(self.data_manager.fetch_historical_data_async(symbol, start_dt, end_dt))
+                if df.empty:
+                    self.logger.global_logger.error(f"No data fetched for {symbol} after fallback")
+                    return
         elif df is None:
             raise ValueError("Either provide a DataFrame or symbol, start_date, and end_date.")
 

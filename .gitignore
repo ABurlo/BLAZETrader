@@ -1,0 +1,4 @@
+logs/global.log
+src/visualization/__pycache__/trading_dashboard.cpython-312.pyc
+src/config/__pycache__/config.cpython-312.pyc
+src/data/__pycache__/data_manager.cpython-312.pyc
