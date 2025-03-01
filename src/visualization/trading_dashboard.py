@@ -1,14 +1,11 @@
-# visualization/trading_dashboard.py
 from ib_insync import IB, Stock, util
 import pandas as pd
 import plotly.graph_objects as go
 import datetime
 import os
-from flask import Flask, render_template
-import asyncio
-from asgiref.wsgi import WsgiToAsgi  # Import WsgiToAsgi
+from quart import Quart, send_file
 
-app = Flask(__name__)
+app = Quart(__name__)
 
 class MarketDataVisualizer:
     def __init__(self, ticker, days_back=30):
@@ -59,7 +56,7 @@ class MarketDataVisualizer:
         
         if self.df is None or self.df.empty:
             print("No data to plot")
-            return
+            return None
 
         # Candlestick chart for price action
         candlestick = go.Candlestick(
@@ -75,7 +72,7 @@ class MarketDataVisualizer:
 
         # Calculate volume color (green for positive change, red for negative)
         volume_colors = ['green' if (self.df['close'] > self.df['open']).iloc[i] else 'red' 
-                        for i in range(len(self.df))]
+                         for i in range(len(self.df))]
         
         # Volume bar chart with colored bars
         volume = go.Bar(
@@ -102,6 +99,9 @@ class MarketDataVisualizer:
             height=800
         )
 
+        # Ensure the templates directory exists
+        os.makedirs(os.path.dirname(output_html), exist_ok=True)
+
         # Create figure and save as HTML
         fig = go.Figure(data=[candlestick, volume], layout=layout)
         fig.write_html(output_html)
@@ -110,15 +110,16 @@ class MarketDataVisualizer:
 
 @app.route('/')
 async def show_chart():
+    """Async route to generate and serve the interactive chart"""
     ticker = "AAPL"  # Default ticker, can be made dynamic via input or config
     days_back = 30
     visualizer = MarketDataVisualizer(ticker, days_back)
+    
     chart_path = await visualizer.create_interactive_chart()
-    return render_template('ib_trading_chart.html')
+    if chart_path is None:
+        return "Error generating chart", 500
+    
+    return await send_file(chart_path)
 
 if __name__ == "__main__":
-    # This block is optional for development, but we'll run with uvicorn instead
-    pass
-
-# Create an ASGI adapter for the Flask app
-asgi_app = WsgiToAsgi(app)
+    app.run(host="0.0.0.0", port=1337)
