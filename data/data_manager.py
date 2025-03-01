@@ -1,169 +1,122 @@
 import pandas as pd
-import asyncio
-import os
-from typing import Callable, Optional
 from ib_insync import IB, Stock, BarDataList, RealTimeBar
-from config.config import Config  # Absolute import
-from logging.logger import TradingLogger  # Absolute import
+from src.config.config import Config  # Absolute import
+from src.logging.logger import TradingLogger  # Corrected import
 
 class DataManager:
     def __init__(self):
-        self.ib = IB()
-        self.logger = TradingLogger()
-        self.data_cache = {}
-        self._loop = None  # Store the event loop for reference
-        self.is_connected = False
-
-    async def connect(self, timeout: int = 10) -> bool:
         """
-        Asynchronously connect to IBKR with a timeout.
-
-        Args:
-            timeout: Maximum time in seconds to wait for connection.
-
-        Returns:
-            bool: True if connected, False otherwise.
+        Initialize the DataManager with configuration and logging.
         """
-        try:
-            # Use nest_asyncio if running in Jupyter or nested loops
-            if 'jupyter' in os.environ.get('JPY_PARENT_PID', ''):
-                import nest_asyncio
-                nest_asyncio.apply()
-                self.logger.global_logger.info("Applied nest_asyncio for Jupyter compatibility.")
+        self.config = Config()
+        self.logger = TradingLogger()  # Initialize custom logger from src/logging/logger.py
+        self.ib = None  # IB connection will be initialized as needed
+        self.logger.log("INFO", "DataManager initialized", "global")
 
-            # Ensure we use the running loop or create a new one
+    def connect(self):
+        """
+        Connect to Interactive Brokers TWS or Gateway.
+        """
+        if self.ib is None or not self.ib.isConnected():
             try:
-                self._loop = asyncio.get_running_loop()
-            except RuntimeError:
-                self._loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(self._loop)
+                self.ib = IB()
+                self.ib.connect(
+                    host=self.config.ib_host,
+                    port=self.config.ib_port,
+                    clientId=self.config.ib_client_id
+                )
+                self.logger.log("INFO", "Connected to Interactive Brokers", "global")
+            except Exception as e:
+                self.logger.log("ERROR", f"Failed to connect to IB: {str(e)}", "error")
+                raise
 
-            # Attempt to connect with a timeout
-            await asyncio.wait_for(self.ib.connectAsync('127.0.0.1', 7497, clientId=1), timeout=timeout)
-            self.is_connected = True
-            self.logger.global_logger.info("Connected to IBKR")
-            return True
-
-        except asyncio.TimeoutError:
-            self.logger.global_logger.error("Timeout connecting to IBKR")
-            return False
-        except Exception as e:
-            self.logger.global_logger.error(f"Error connecting to IBKR: {str(e)}")
-            return False
-        finally:
-            if not self._loop.is_running():
-                self._loop.close()
-                self.logger.global_logger.info("Event loop closed after connection attempt.")
-
-    async def fetch_historical_data_async(self, symbol: str, start_date: str, end_date: str, 
-                                        timeframe: str = "1 day") -> pd.DataFrame:
+    def disconnect(self):
         """
-        Asynchronously fetch historical data from IBKR.
+        Disconnect from Interactive Brokers.
+        """
+        if self.ib and self.ib.isConnected():
+            self.ib.disconnect()
+            self.logger.log("INFO", "Disconnected from Interactive Brokers", "global")
+
+    def get_historical_data(self, contract, duration: str = "1 D", bar_size: str = "1 min"):
+        """
+        Fetch historical data for a given contract.
 
         Args:
-            symbol: Stock symbol (e.g., 'AAPL').
-            start_date: Start date in 'YYYYMMDD HH:MM:SS' format.
-            end_date: End date in 'YYYYMMDD HH:MM:SS' format.
-            timeframe: Bar size (e.g., '1 day', '1 hour').
+            contract: IB contract object (e.g., Stock).
+            duration: Duration string (e.g., "1 D" for 1 day).
+            bar_size: Bar size setting (e.g., "1 min").
 
         Returns:
-            pd.DataFrame: Historical data or empty DataFrame if error occurs.
+            pd.DataFrame: Historical data as a DataFrame.
         """
+        self.connect()
         try:
-            if not self.is_connected:
-                if not await self.connect():
-                    raise ConnectionError("Failed to connect to IBKR")
-
-            contract = Stock(symbol, 'SMART', 'USD')
-            self.ib.qualifyContracts(contract)
-            
-            
-            bars = await self.ib.reqHistoricalDataAsync(
+            bars = self.ib.reqHistoricalData(
                 contract,
-                endDateTime=end_date,
-                durationStr=f"{(pd.to_datetime(end_date) - pd.to_datetime(start_date)).days} D",
-                barSizeSetting=timeframe,
+                endDateTime='',
+                durationStr=duration,
+                barSizeSetting=bar_size,
                 whatToShow='TRADES',
                 useRTH=True,
                 formatDate=1
             )
-
             if not bars:
-                self.logger.global_logger.error(f"No historical data fetched for {symbol}")
+                self.logger.log("WARNING", f"No historical data returned for {contract.symbol}", "global")
                 return pd.DataFrame()
-
-            df = self._bars_to_df(bars)
-            self.data_cache[symbol] = df
-            self.logger.global_logger.info(f"Fetched historical data for {symbol}: {df.shape[0]} rows.")
+            
+            # Convert BarDataList to DataFrame
+            df = pd.DataFrame(
+                [(bar.date, bar.open, bar.high, bar.low, bar.close, bar.volume) for bar in bars],
+                columns=['date', 'open', 'high', 'low', 'close', 'volume']
+            )
+            df['date'] = pd.to_datetime(df['date'])
+            self.logger.log("INFO", f"Fetched {len(df)} bars for {contract.symbol}", "trade")
             return df
         
         except Exception as e:
-            self.logger.global_logger.error(f"Error fetching historical data for {symbol}: {str(e)}")
+            self.logger.log("ERROR", f"Error fetching historical data: {str(e)}", "error")
             return pd.DataFrame()
+        finally:
+            self.disconnect()
 
-    async def req_real_time_bars(self, symbol: str, callback: Callable[[RealTimeBar], None]) -> None:
+    def get_realtime_bars(self, contract, callback):
         """
-        Asynchronously subscribe to real-time bars for a symbol.
+        Subscribe to real-time bars for a given contract.
 
         Args:
-            symbol: Stock symbol (e.g., 'AAPL').
-            callback: Function to handle real-time bar updates.
+            contract: IB contract object (e.g., Stock).
+            callback: Function to handle incoming RealTimeBar events.
         """
+        self.connect()
         try:
-            if not self.is_connected:
-                if not await self.connect():
-                    raise ConnectionError("Failed to connect to IBKR")
-
-            contract = Stock(symbol, 'SMART', 'USD')
-            self.ib.qualifyContracts(contract)
-
-            # Use async/await with ib_insync's real-time bars
-            await self.ib.reqRealTimeBarsAsync(
+            self.ib.reqRealTimeBars(
                 contract,
-                5,  # 5-second bars
-                'TRADES',
-                True,
+                barSize=5,  # 5-second bars
+                whatToShow='TRADES',
+                useRTH=True,
+                realTimeBarsOptions=[],
                 callback=callback
             )
-            self.logger.global_logger.info(f"Subscribed to real-time bars for {symbol}")
-
+            self.logger.log("INFO", f"Subscribed to real-time bars for {contract.symbol}", "trade")
         except Exception as e:
-            self.logger.global_logger.error(f"Error subscribing to real-time bars for {symbol}: {str(e)}")
+            self.logger.log("ERROR", f"Error subscribing to real-time bars: {str(e)}", "error")
+            raise
 
-    def _bars_to_df(self, bars: BarDataList) -> pd.DataFrame:
+    def cancel_realtime_bars(self, contract):
         """
-        Convert IBKR BarDataList to a pandas DataFrame.
+        Cancel real-time bar subscription for a contract.
 
         Args:
-            bars: List of BarData objects from IBKR.
-
-        Returns:
-            pd.DataFrame: DataFrame with OHLCV data.
+            contract: IB contract object.
         """
-        if not bars:
-            return pd.DataFrame()
-        return pd.DataFrame({
-            'date': [b.date for b in bars],
-            'open': [b.open for b in bars],
-            'high': [b.high for b in bars],
-            'low': [b.low for b in bars],
-            'close': [b.close for b in bars],
-            'volume': [b.volume for b in bars]
-        })
+        if self.ib and self.ib.isConnected():
+            self.ib.cancelRealTimeBars(contract)
+            self.logger.log("INFO", f"Cancelled real-time bars for {contract.symbol}", "trade")
 
-    async def disconnect(self) -> None:
-        """Asynchronously disconnect from IBKR and clean up."""
-        try:
-            if self.is_connected:
-                self.ib.disconnect()
-                self.is_connected = False
-                self.logger.global_logger.info("Disconnected from IBKR")
-            if self._loop and not self._loop.is_closed():
-                self._loop.close()
-                self.logger.global_logger.info("Event loop closed after disconnection.")
-        except Exception as e:
-            self.logger.global_logger.error(f"Error disconnecting from IBKR: {str(e)}")
-
-    def __del__(self):
-        """Ensure disconnection on object deletion."""
-        asyncio.run(self.disconnect()) if self.is_connected else None
+if __name__ == "__main__":
+    # Example usage
+    dm = DataManager()
+    stock = Stock("AAPL", "SMART", "USD")
+    df = dm.get_historical_data(stock)
+    print(df.head())

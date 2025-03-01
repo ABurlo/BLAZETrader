@@ -3,7 +3,7 @@ from src.data.data_manager import DataManager
 from src.trading.portfolio import Portfolio
 from src.trading.orders import OrderManager
 from src.trading.limits import TradingLimits
-from src.plugins import PluginManager
+from src.plugins.base_plugin import PluginManager
 from src.logging.logger import TradingLogger
 from typing import Optional, Tuple
 import asyncio
