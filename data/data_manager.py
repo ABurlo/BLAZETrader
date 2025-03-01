@@ -1,57 +1,87 @@
-# src/data_manager.py
-
-from ib_insync import IB, Stock, BarDataList, RealTimeBar
 import pandas as pd
 import asyncio
 import os
-from config.config import Config
-from logging.logger import TradingLogger
+from typing import Callable, Optional
+from ib_insync import IB, Stock, BarDataList, RealTimeBar
+from config.config import Config  # Absolute import
+from logging.logger import TradingLogger  # Absolute import
 
 class DataManager:
     def __init__(self):
         self.ib = IB()
         self.logger = TradingLogger()
         self.data_cache = {}
-        self._loop = None  # Store the event loop for consistency
-    
-    async def connect(self):
+        self._loop = None  # Store the event loop for reference
+        self.is_connected = False
+
+    async def connect(self, timeout: int = 10) -> bool:
+        """
+        Asynchronously connect to IBKR with a timeout.
+
+        Args:
+            timeout: Maximum time in seconds to wait for connection.
+
+        Returns:
+            bool: True if connected, False otherwise.
+        """
         try:
-            # Use the current running loop, prioritizing Jupyter's loop
-            self._loop = asyncio.get_running_loop()
-            if self._loop is None or not self._loop.is_running():
-                if 'jupyter' in os.environ.get('JPY_PARENT_PID', ''):
-                    self.logger.global_logger.info("Using Jupyter notebook event loop for IBKR connection...")
-                    self._loop = asyncio.get_event_loop()
-                else:
-                    self.logger.global_logger.info("Creating new event loop for IBKR connection...")
-                    self._loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(self._loop)
-            await self.ib.connectAsync('127.0.0.1', 7497, clientId=1)
+            # Use nest_asyncio if running in Jupyter or nested loops
+            if 'jupyter' in os.environ.get('JPY_PARENT_PID', ''):
+                import nest_asyncio
+                nest_asyncio.apply()
+                self.logger.global_logger.info("Applied nest_asyncio for Jupyter compatibility.")
+
+            # Ensure we use the running loop or create a new one
+            try:
+                self._loop = asyncio.get_running_loop()
+            except RuntimeError:
+                self._loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self._loop)
+
+            # Attempt to connect with a timeout
+            await asyncio.wait_for(self.ib.connectAsync('127.0.0.1', 7497, clientId=1), timeout=timeout)
+            self.is_connected = True
             self.logger.global_logger.info("Connected to IBKR")
+            return True
+
+        except asyncio.TimeoutError:
+            self.logger.global_logger.error("Timeout connecting to IBKR")
+            return False
         except Exception as e:
             self.logger.global_logger.error(f"Error connecting to IBKR: {str(e)}")
-            raise
-    
-    async def fetch_historical_data_async(self, symbol, start_date, end_date, timeframe="1 day"):
+            return False
+        finally:
+            if not self._loop.is_running():
+                self._loop.close()
+                self.logger.global_logger.info("Event loop closed after connection attempt.")
+
+    async def fetch_historical_data_async(self, symbol: str, start_date: str, end_date: str, 
+                                        timeframe: str = "1 day") -> pd.DataFrame:
         """
-        Asynchronously fetch historical data from IBKR, handling the event loop correctly.
+        Asynchronously fetch historical data from IBKR.
+
+        Args:
+            symbol: Stock symbol (e.g., 'AAPL').
+            start_date: Start date in 'YYYYMMDD HH:MM:SS' format.
+            end_date: End date in 'YYYYMMDD HH:MM:SS' format.
+            timeframe: Bar size (e.g., '1 day', '1 hour').
+
+        Returns:
+            pd.DataFrame: Historical data or empty DataFrame if error occurs.
         """
         try:
-            # Ensure IBKR is connected
-            if not self.ib.isConnected():
-                await self.connect()
+            if not self.is_connected:
+                if not await self.connect():
+                    raise ConnectionError("Failed to connect to IBKR")
 
             contract = Stock(symbol, 'SMART', 'USD')
             self.ib.qualifyContracts(contract)
-
-            # Use ib_insync's async method for historical data with the current loop
-            if self._loop is None:
-                self._loop = asyncio.get_running_loop() or asyncio.new_event_loop()
+            
             
             bars = await self.ib.reqHistoricalDataAsync(
                 contract,
                 endDateTime=end_date,
-                durationStr=f"{(end_date - start_date).days} D",
+                durationStr=f"{(pd.to_datetime(end_date) - pd.to_datetime(start_date)).days} D",
                 barSizeSetting=timeframe,
                 whatToShow='TRADES',
                 useRTH=True,
@@ -64,21 +94,31 @@ class DataManager:
 
             df = self._bars_to_df(bars)
             self.data_cache[symbol] = df
-            self.logger.global_logger.info(f"Fetched historical data for {symbol}: {df.shape} rows.")
+            self.logger.global_logger.info(f"Fetched historical data for {symbol}: {df.shape[0]} rows.")
             return df
-
+        
         except Exception as e:
             self.logger.global_logger.error(f"Error fetching historical data for {symbol}: {str(e)}")
             return pd.DataFrame()
 
-    def req_real_time_bars(self, symbol, callback):
+    async def req_real_time_bars(self, symbol: str, callback: Callable[[RealTimeBar], None]) -> None:
+        """
+        Asynchronously subscribe to real-time bars for a symbol.
+
+        Args:
+            symbol: Stock symbol (e.g., 'AAPL').
+            callback: Function to handle real-time bar updates.
+        """
         try:
-            if not self.ib.isConnected():
-                raise ConnectionError("Not connected to IBKR. Call connect() first.")
-            
+            if not self.is_connected:
+                if not await self.connect():
+                    raise ConnectionError("Failed to connect to IBKR")
+
             contract = Stock(symbol, 'SMART', 'USD')
             self.ib.qualifyContracts(contract)
-            self.ib.reqRealTimeBars(
+
+            # Use async/await with ib_insync's real-time bars
+            await self.ib.reqRealTimeBarsAsync(
                 contract,
                 5,  # 5-second bars
                 'TRADES',
@@ -86,10 +126,20 @@ class DataManager:
                 callback=callback
             )
             self.logger.global_logger.info(f"Subscribed to real-time bars for {symbol}")
+
         except Exception as e:
             self.logger.global_logger.error(f"Error subscribing to real-time bars for {symbol}: {str(e)}")
 
     def _bars_to_df(self, bars: BarDataList) -> pd.DataFrame:
+        """
+        Convert IBKR BarDataList to a pandas DataFrame.
+
+        Args:
+            bars: List of BarData objects from IBKR.
+
+        Returns:
+            pd.DataFrame: DataFrame with OHLCV data.
+        """
         if not bars:
             return pd.DataFrame()
         return pd.DataFrame({
@@ -101,13 +151,19 @@ class DataManager:
             'volume': [b.volume for b in bars]
         })
 
-    def disconnect(self):
-        """Disconnect from IBKR."""
+    async def disconnect(self) -> None:
+        """Asynchronously disconnect from IBKR and clean up."""
         try:
-            self.ib.disconnect()
-            self.logger.global_logger.info("Disconnected from IBKR")
+            if self.is_connected:
+                self.ib.disconnect()
+                self.is_connected = False
+                self.logger.global_logger.info("Disconnected from IBKR")
             if self._loop and not self._loop.is_closed():
                 self._loop.close()
                 self.logger.global_logger.info("Event loop closed after disconnection.")
         except Exception as e:
             self.logger.global_logger.error(f"Error disconnecting from IBKR: {str(e)}")
+
+    def __del__(self):
+        """Ensure disconnection on object deletion."""
+        asyncio.run(self.disconnect()) if self.is_connected else None
