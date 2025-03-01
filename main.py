@@ -8,7 +8,7 @@ sys.path.insert(0, project_root)
 # Use absolute imports from the src package
 from src.config.config import Config
 from src.trading.engine import TradingEngine
-from src.visualization.trading_dashboard import Plotter
+from src.visualization.trading_dashboard import TradingDashboard
 
 # Apply nest_asyncio to allow nested event loops (needed for ib_insync in some environments)
 import nest_asyncio

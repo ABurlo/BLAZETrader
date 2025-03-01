@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 
-class BasePlugin(ABC):
+class PluginManager(ABC):
     def __init__(self, enabled=True):
         self.enabled = enabled
         
