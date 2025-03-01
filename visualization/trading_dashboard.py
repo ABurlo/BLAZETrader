@@ -8,8 +8,8 @@ import webbrowser
 import numpy as np
 import os
 import asyncio
-from src.data.data_manager import DataManager
-from src.logging.logger import TradingLogger
+from data.data_manager import DataManager
+from log.logger import TradingLogger
 
 class TradingDashboard:
     def __init__(self):

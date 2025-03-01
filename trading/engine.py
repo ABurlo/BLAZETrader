@@ -1,10 +1,10 @@
 import pandas as pd
-from src.data.data_manager import DataManager
-from src.trading.portfolio import Portfolio
-from src.trading.orders import OrderManager
-from src.trading.limits import TradingLimits
-from src.plugins.plugin_manager import PluginManager
-from src.logging.logger import TradingLogger
+from data.data_manager import DataManager
+from trading.portfolio import Portfolio
+from trading.orders import OrderManager
+from trading.limits import TradingLimits
+from plugins.plugin_manager import PluginManager
+from log.logger import TradingLogger
 from typing import Optional, Tuple
 import asyncio
 

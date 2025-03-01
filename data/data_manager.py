@@ -1,7 +1,7 @@
 import pandas as pd
 from ib_insync import IB, Stock, BarDataList, RealTimeBar
-from src.config.config import Config  # Absolute import
-from src.logging.logger import TradingLogger  # Corrected import
+from config.config import Config  # Absolute import
+from log.logger import TradingLogger  # Corrected import
 
 class DataManager:
     def __init__(self):
