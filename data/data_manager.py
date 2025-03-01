@@ -4,8 +4,8 @@ from ib_insync import IB, Stock, BarDataList, RealTimeBar
 import pandas as pd
 import asyncio
 import os
-from src.config.config import Config
-from src.logging.logger import TradingLogger
+from config.config import Config
+from logging.logger import TradingLogger
 
 class DataManager:
     def __init__(self):
