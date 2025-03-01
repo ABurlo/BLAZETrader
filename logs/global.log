@@ -212,3 +212,69 @@
 [32m2025-03-01 20:14:16,962 | global | INFO | Connected to IBKR[0m
 [32m2025-03-01 20:15:03,340 | global | INFO | Connected to IBKR[0m
 [32m2025-03-01 20:15:03,340 | global | INFO | Connected to IBKR[0m
+[32m2025-03-01 20:21:40,826 | global | INFO | Event loop already running, scheduling main()...[0m
+[32m2025-03-01 20:21:40,830 | global | INFO | Connecting to IBKR...[0m
+[32m2025-03-01 20:21:40,830 | global | INFO | Connecting to IBKR...[0m
+[32m2025-03-01 20:21:40,830 | global | INFO | Connecting to IBKR...[0m
+[32m2025-03-01 20:21:40,830 | global | INFO | Connecting to IBKR...[0m
+[32m2025-03-01 20:21:41,140 | global | INFO | Connected to IBKR[0m
+[32m2025-03-01 20:21:41,140 | global | INFO | Connected to IBKR[0m
+[32m2025-03-01 20:21:41,140 | global | INFO | Connected to IBKR[0m
+[32m2025-03-01 20:21:41,140 | global | INFO | Connected to IBKR[0m
+[32m2025-03-01 20:21:41,142 | global | INFO | Connected to IBKR via DataManager.[0m
+[32m2025-03-01 20:21:41,142 | global | INFO | Connected to IBKR via DataManager.[0m
+[32m2025-03-01 20:21:41,142 | global | INFO | Connected to IBKR via DataManager.[0m
+[32m2025-03-01 20:21:41,142 | global | INFO | Connected to IBKR via DataManager.[0m
+[32m2025-03-01 20:21:41,146 | global | INFO | Connected to IBKR successfully.[0m
+[32m2025-03-01 20:21:41,146 | global | INFO | Connected to IBKR successfully.[0m
+[32m2025-03-01 20:21:41,146 | global | INFO | Connected to IBKR successfully.[0m
+[32m2025-03-01 20:21:41,146 | global | INFO | Connected to IBKR successfully.[0m
+[32m2025-03-01 20:21:41,150 | global | INFO | Fetching historical data for AMZN...[0m
+[32m2025-03-01 20:21:41,150 | global | INFO | Fetching historical data for AMZN...[0m
+[32m2025-03-01 20:21:41,150 | global | INFO | Fetching historical data for AMZN...[0m
+[32m2025-03-01 20:21:41,150 | global | INFO | Fetching historical data for AMZN...[0m
+[31m2025-03-01 20:21:41,152 | global | ERROR | Error fetching historical data for AMZN: This event loop is already running[0m
+[31m2025-03-01 20:21:41,152 | global | ERROR | Error fetching historical data for AMZN: This event loop is already running[0m
+[31m2025-03-01 20:21:41,152 | global | ERROR | Error fetching historical data for AMZN: This event loop is already running[0m
+[31m2025-03-01 20:21:41,152 | global | ERROR | Error fetching historical data for AMZN: This event loop is already running[0m
+[32m2025-03-01 20:21:41,159 | global | INFO | Data fetched for AMZN: Empty DataFrame rows.[0m
+[32m2025-03-01 20:21:41,159 | global | INFO | Data fetched for AMZN: Empty DataFrame rows.[0m
+[32m2025-03-01 20:21:41,159 | global | INFO | Data fetched for AMZN: Empty DataFrame rows.[0m
+[32m2025-03-01 20:21:41,159 | global | INFO | Data fetched for AMZN: Empty DataFrame rows.[0m
+[31m2025-03-01 20:21:41,162 | global | ERROR | No data fetched for the given period. Aborting dashboard generation.[0m
+[31m2025-03-01 20:21:41,162 | global | ERROR | No data fetched for the given period. Aborting dashboard generation.[0m
+[31m2025-03-01 20:21:41,162 | global | ERROR | No data fetched for the given period. Aborting dashboard generation.[0m
+[31m2025-03-01 20:21:41,162 | global | ERROR | No data fetched for the given period. Aborting dashboard generation.[0m
+[32m2025-03-01 20:21:55,627 | global | INFO | Event loop already running, scheduling main()...[0m
+[32m2025-03-01 20:21:55,631 | global | INFO | Connecting to IBKR...[0m
+[32m2025-03-01 20:21:55,631 | global | INFO | Connecting to IBKR...[0m
+[32m2025-03-01 20:21:55,631 | global | INFO | Connecting to IBKR...[0m
+[32m2025-03-01 20:21:55,631 | global | INFO | Connecting to IBKR...[0m
+[32m2025-03-01 20:21:56,042 | global | INFO | Connected to IBKR[0m
+[32m2025-03-01 20:21:56,042 | global | INFO | Connected to IBKR[0m
+[32m2025-03-01 20:21:56,042 | global | INFO | Connected to IBKR[0m
+[32m2025-03-01 20:21:56,042 | global | INFO | Connected to IBKR[0m
+[32m2025-03-01 20:21:56,047 | global | INFO | Connected to IBKR via DataManager.[0m
+[32m2025-03-01 20:21:56,047 | global | INFO | Connected to IBKR via DataManager.[0m
+[32m2025-03-01 20:21:56,047 | global | INFO | Connected to IBKR via DataManager.[0m
+[32m2025-03-01 20:21:56,047 | global | INFO | Connected to IBKR via DataManager.[0m
+[32m2025-03-01 20:21:56,052 | global | INFO | Connected to IBKR successfully.[0m
+[32m2025-03-01 20:21:56,052 | global | INFO | Connected to IBKR successfully.[0m
+[32m2025-03-01 20:21:56,052 | global | INFO | Connected to IBKR successfully.[0m
+[32m2025-03-01 20:21:56,052 | global | INFO | Connected to IBKR successfully.[0m
+[32m2025-03-01 20:21:56,058 | global | INFO | Fetching historical data for AMZN...[0m
+[32m2025-03-01 20:21:56,058 | global | INFO | Fetching historical data for AMZN...[0m
+[32m2025-03-01 20:21:56,058 | global | INFO | Fetching historical data for AMZN...[0m
+[32m2025-03-01 20:21:56,058 | global | INFO | Fetching historical data for AMZN...[0m
+[31m2025-03-01 20:21:56,064 | global | ERROR | Error fetching historical data for AMZN: This event loop is already running[0m
+[31m2025-03-01 20:21:56,064 | global | ERROR | Error fetching historical data for AMZN: This event loop is already running[0m
+[31m2025-03-01 20:21:56,064 | global | ERROR | Error fetching historical data for AMZN: This event loop is already running[0m
+[31m2025-03-01 20:21:56,064 | global | ERROR | Error fetching historical data for AMZN: This event loop is already running[0m
+[32m2025-03-01 20:21:56,071 | global | INFO | Data fetched for AMZN: Empty DataFrame rows.[0m
+[32m2025-03-01 20:21:56,071 | global | INFO | Data fetched for AMZN: Empty DataFrame rows.[0m
+[32m2025-03-01 20:21:56,071 | global | INFO | Data fetched for AMZN: Empty DataFrame rows.[0m
+[32m2025-03-01 20:21:56,071 | global | INFO | Data fetched for AMZN: Empty DataFrame rows.[0m
+[31m2025-03-01 20:21:56,077 | global | ERROR | No data fetched for the given period. Aborting dashboard generation.[0m
+[31m2025-03-01 20:21:56,077 | global | ERROR | No data fetched for the given period. Aborting dashboard generation.[0m
+[31m2025-03-01 20:21:56,077 | global | ERROR | No data fetched for the given period. Aborting dashboard generation.[0m
+[31m2025-03-01 20:21:56,077 | global | ERROR | No data fetched for the given period. Aborting dashboard generation.[0m

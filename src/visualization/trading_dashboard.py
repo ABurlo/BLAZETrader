@@ -6,7 +6,9 @@ import pandas as pd
 from datetime import datetime
 import webbrowser
 import numpy as np
-from src.data.data_manager import DataManager  # Import DataManager
+import os
+from src.data.data_manager import DataManager
+from src.logging.logger import TradingLogger
 
 class TradingDashboard:
     def __init__(self):
@@ -20,10 +22,16 @@ class TradingDashboard:
         }
         self.pane_configs = {}  # Store pane configurations (type, data, etc.)
         self.data_manager = DataManager()  # Initialize DataManager
+        self.logger = TradingLogger()
 
     async def connect_to_ibkr(self):
         """Asynchronously connect to IBKR using DataManager."""
-        await self.data_manager.connect()
+        try:
+            await self.data_manager.connect()
+            self.logger.global_logger.info("Connected to IBKR via DataManager.")
+        except Exception as e:
+            self.logger.global_logger.error(f"Error connecting to IBKR: {str(e)}")
+            raise
 
     def add_pane(self, slot, pane_type, df=None, symbol=None, start_date=None, end_date=None, title=None, **kwargs):
         """
@@ -57,6 +65,9 @@ class TradingDashboard:
             else:
                 end_dt = end_date
             df = self.data_manager.fetch_historical_data(symbol, start_dt, end_dt, timeframe="1 day")
+            if df.empty:
+                self.logger.global_logger.error(f"No data fetched for {symbol} from {start_dt} to {end_dt}")
+                return
         elif df is None:
             raise ValueError("Either provide a DataFrame or symbol, start_date, and end_date.")
 
@@ -287,10 +298,20 @@ class TradingDashboard:
                     )
 
         # Save and open the dashboard in a browser
-        html_content = self.fig.to_html(include_plotlyjs='cdn', full_html=True)
-        with open(f"dashboard_{symbol}_{start_dt.strftime('%d_%m_%Y')}_{end_dt.strftime('%d_%m_%Y')}.html", "w") as f:
-            f.write(html_content)
-        webbrowser.open(f"dashboard_{symbol}_{start_dt.strftime('%d_%m_%Y')}_{end_dt.strftime('%d_%m_%Y')}.html", new=2)  # new=2 opens in a new tab
+        output_dir = os.getcwd()  # Use current working directory or specify a path
+        full_path = os.path.join(output_dir, f"dashboard_{symbol}_{start_dt.strftime('%d_%m_%Y')}_{end_dt.strftime('%d_%m_%Y')}.html")
+        self.logger.global_logger.info(f"Generating HTML file at: {full_path}")
+        
+        try:
+            html_content = self.fig.to_html(include_plotlyjs='cdn', full_html=True)
+            with open(full_path, "w") as f:
+                self.logger.global_logger.info("Writing HTML content to file...")
+                f.write(html_content)
+            self.logger.global_logger.info("HTML file generated successfully.")
+            webbrowser.open(full_path, new=2)  # new=2 opens in a new tab
+        except Exception as e:
+            self.logger.global_logger.error(f"Error generating HTML file: {str(e)}")
+            raise
 
     def clear_panes(self):
         """Clear all pane configurations."""
@@ -298,4 +319,8 @@ class TradingDashboard:
 
     def disconnect_from_ibkr(self):
         """Disconnect from IBKR using DataManager."""
-        self.data_manager.disconnect()
+        try:
+            self.data_manager.disconnect()
+            self.logger.global_logger.info("Disconnected from IBKR via DataManager.")
+        except Exception as e:
+            self.logger.global_logger.error(f"Error disconnecting from IBKR: {str(e)}")
