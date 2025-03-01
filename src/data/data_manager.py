@@ -1,6 +1,8 @@
+# src/data_manager.py
+
 from ib_insync import IB, Stock, BarDataList, RealTimeBar
 import pandas as pd
-from src.config import Config
+from src.config.config import Config
 from src.logging.logger import TradingLogger
 
 class DataManager:
@@ -51,3 +53,8 @@ class DataManager:
             'close': [b.close for b in bars],
             'volume': [b.volume for b in bars]
         })
+
+    def disconnect(self):
+        """Disconnect from IBKR."""
+        self.ib.disconnect()
+        self.logger.global_logger.info("Disconnected from IBKR")
