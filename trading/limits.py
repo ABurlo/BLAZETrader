@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from config.config import Config
+from src.config import Config
 
 class TradingLimits:
     def __init__(self):
