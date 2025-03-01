@@ -17,15 +17,19 @@ async def main():
     data_manager = DataManager()
     dashboard = TradingDashboard()
 
-    # Connect to IBKR asynchronously
-    await dashboard.connect_to_ibkr()
-
     try:
+        # Connect to IBKR asynchronously
+        await dashboard.connect_to_ibkr()
         # Fetch historical data for AMZN
         symbol = 'AMZN'
         start_date = '01/01/2024'
         end_date = '31/12/2024'
-        df = data_manager.fetch_historical_data(symbol, datetime.strptime(start_date, '%d/%m/%Y'), datetime.strptime(end_date, '%d/%m/%Y'))
+        
+        # Convert dates to datetime for IBKR
+        start_dt = datetime.strptime(start_date, '%d/%m/%Y')
+        end_dt = datetime.strptime(end_date, '%d/%m/%Y')
+        
+        df = data_manager.fetch_historical_data(symbol, start_dt, end_dt)
 
         # Add panes to the dashboard
         dashboard.add_pane('TL', 'ohlc', df, title="Price Action (OHLC)", symbol=symbol)
@@ -37,8 +41,38 @@ async def main():
         await dashboard.build_dashboard(start_date, end_date, 0.00, symbol=symbol)
 
     finally:
-        # Disconnect from IBKR
+        # Cancel any pending tasks and disconnect from IBKR
+        pending = asyncio.all_tasks()
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
         dashboard.disconnect_from_ibkr()
 
+def run_main():
+    """Run the main coroutine, handling the event loop appropriately."""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # If an event loop is already running (e.g., in Jupyter or an IDE), run the coroutine in the current loop
+            asyncio.ensure_future(main())
+        else:
+            # If no event loop is running, create and run a new one
+            loop.run_until_complete(main())
+    except RuntimeError as e:
+        print(f"Error: {e}")
+        # Fallback: Create a new event loop if necessary
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(main())
+    finally:
+        # Only close the loop if it's not running and there are no pending tasks
+        loop = asyncio.get_event_loop()
+        if not loop.is_running() and not loop.is_closed():
+            pending = asyncio.all_tasks(loop)
+            if not pending:
+                loop.close()
+            else:
+                print("Warning: Not closing loop due to pending tasks.")
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    run_main()

@@ -6,7 +6,7 @@ import pandas as pd
 from datetime import datetime
 import webbrowser
 import numpy as np
-from data.data_manager import DataManager  # Import DataManager
+from src.data.data_manager import DataManager  # Import DataManager
 
 class TradingDashboard:
     def __init__(self):
