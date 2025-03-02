@@ -6,65 +6,99 @@
 <h2 class="mb-4">Portfolio</h2>
 
 <!-- Portfolio Summary -->
-<div class="row mb-4">
-    <div class="col-md-4">
-        <div class="card bg-dark border-0 shadow">
-            <div class="card-body">
-                <h5 class="card-title"><i class="fas fa-wallet me-2"></i>Total Value</h5>
-                <p class="card-text display-6">$125,430.50</p>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-4">
-        <div class="card bg-dark border-0 shadow">
-            <div class="card-body">
-                <h5 class="card-title"><i class="fas fa-chart-line me-2"></i>Day Change</h5>
-                <p class="card-text display-6 text-success">+2.3%</p>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-4">
-        <div class="card bg-dark border-0 shadow">
-            <div class="card-body">
-                <h5 class="card-title"><i class="fas fa-percentage me-2"></i>Overall Return</h5>
-                <p class="card-text display-6 text-success">+18.7%</p>
-            </div>
-        </div>
+<div class="card bg-dark border-0 shadow mb-4">
+    <div class="card-body">
+        <h5 class="card-title text-white"><i class="fas fa-wallet me-2"></i>Portfolio Summary</h5>
+        <p class="text-white"><strong>Total Value:</strong> {{ total_value }}</p>
+        <p class="text-white"><strong>Total Change:</strong> {{ total_change }}</p>
+        <p class="text-white"><strong>Demo Balance:</strong> {{ demo_balance }}</p>
     </div>
 </div>
 
-<!-- Holdings Table -->
+<!-- Portfolio Table -->
 <div class="card bg-dark border-0 shadow">
     <div class="card-body">
-        <h5 class="card-title"><i class="fas fa-list me-2"></i>Your Holdings</h5>
-        <table class="table table-dark table-hover">
+        <h5 class="card-title text-white"><i class="fas fa-list me-2"></i>Holdings</h5>
+        <table class="table table-dark table-striped">
             <thead>
                 <tr>
-                    <th>Ticker</th>
-                    <th>Shares</th>
-                    <th>Price</th>
-                    <th>Value</th>
-                    <th>Change</th>
+                    <th class="text-white">Ticker</th>
+                    <th class="text-white">Shares</th>
+                    <th class="text-white">Price</th>
+                    <th class="text-white">Value</th>
+                    <th class="text-white">Change</th>
+                    <th class="text-white">Actions</th>
                 </tr>
             </thead>
             <tbody>
+                {% for ticker, data in portfolio.items() %}
                 <tr>
-                    <td>AAPL</td>
-                    <td>100</td>
-                    <td>$175.30</td>
-                    <td>$17,530.00</td>
-                    <td class="text-success">+1.2%</td>
+                    <td class="text-white">{{ ticker }}</td>
+                    <td class="text-white">{{ data.shares }}</td>
+                    <td class="text-white">${{ data.price|float }}</td>
+                    <td class="text-white">${{ data.value|float }}</td>
+                    <td class="text-white" style="color: {% if data.change >= 0 %}green{% else %}red{% endif %};">{{ "{:+.2f}%".format(data.change) }}</td>
+                    <td class="text-white">
+                        <form method="post" class="d-inline">
+                            <input type="hidden" name="ticker" value="{{ ticker }}">
+                            <input type="number" name="shares" class="form-control form-control-sm d-inline" style="width: 80px;" min="1" required>
+                            <button type="submit" name="action" value="buy" class="btn btn-success btn-sm me-1">Buy</button>
+                            <button type="submit" name="action" value="sell" class="btn btn-danger btn-sm">Sell</button>
+                        </form>
+                    </td>
                 </tr>
-                <tr>
-                    <td>TSLA</td>
-                    <td>50</td>
-                    <td>$210.45</td>
-                    <td>$10,522.50</td>
-                    <td class="text-danger">-0.8%</td>
-                </tr>
-                <!-- Add more rows dynamically -->
+                {% endfor %}
             </tbody>
         </table>
     </div>
 </div>
+
+<script>
+    // Periodically update portfolio (e.g., every 30 seconds) to simulate live data
+    setInterval(async () => {
+        try {
+            const response = await fetch('/portfolio', { method: 'GET' });
+            const data = await response.json();
+            if (response.ok) {
+                document.querySelector('.card-body').innerHTML = `
+                    <h5 class="card-title text-white"><i class="fas fa-list me-2"></i>Holdings</h5>
+                    <table class="table table-dark table-striped">
+                        <thead><tr>
+                            <th class="text-white">Ticker</th>
+                            <th class="text-white">Shares</th>
+                            <th class="text-white">Price</th>
+                            <th class="text-white">Value</th>
+                            <th class="text-white">Change</th>
+                            <th class="text-white">Actions</th>
+                        </tr></thead>
+                        <tbody>
+                            ${Object.entries(data.portfolio).map(([ticker, data]) => `
+                                <tr>
+                                    <td class="text-white">${ticker}</td>
+                                    <td class="text-white">${data.shares}</td>
+                                    <td class="text-white">$${data.price}</td>
+                                    <td class="text-white">$${data.value}</td>
+                                    <td class="text-white" style="color: ${data.change >= 0 ? 'green' : 'red'};">${data.change.toFixed(2)}%</td>
+                                    <td class="text-white">
+                                        <form method="post" class="d-inline">
+                                            <input type="hidden" name="ticker" value="${ticker}">
+                                            <input type="number" name="shares" class="form-control form-control-sm d-inline" style="width: 80px;" min="1" required>
+                                            <button type="submit" name="action" value="buy" class="btn btn-success btn-sm me-1">Buy</button>
+                                            <button type="submit" name="action" value="sell" class="btn btn-danger btn-sm">Sell</button>
+                                        </form>
+                                    </td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                    <p class="text-white"><strong>Total Value:</strong> $${data.total_value}</p>
+                    <p class="text-white"><strong>Total Change:</strong> ${data.total_change}%</p>
+                    <p class="text-white"><strong>Demo Balance:</strong> $${data.demo_balance}</p>
+                `;
+            }
+        } catch (error) {
+            console.error('Error updating portfolio:', error);
+        }
+    }, 30000); // Update every 30 seconds
+</script>
 {% endblock %}

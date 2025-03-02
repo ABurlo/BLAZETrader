@@ -7,34 +7,19 @@
 
 <div class="card bg-dark border-0 shadow">
     <div class="card-body">
-        <h5 class="card-title"><i class="fas fa-cog me-2"></i>User Preferences</h5>
-        <form>
-            <div class="row">
-                <div class="col-md-6 mb-3">
-                    <label for="theme" class="form-label">Theme</label>
-                    <select class="form-control bg-dark text-light border-secondary" id="theme">
-                        <option>Dark</option>
-                        <option>Light</option>
-                    </select>
-                </div>
-                <div class="col-md-6 mb-3">
-                    <label for="timezone" class="form-label">Timezone</label>
-                    <select class="form-control bg-dark text-light border-secondary" id="timezone">
-                        <option>US/Eastern</option>
-                        <option>US/Pacific</option>
-                        <option>UTC</option>
-                    </select>
-                </div>
-                <div class="col-md-6 mb-3">
-                    <label for="email" class="form-label">Email Notifications</label>
-                    <input type="email" class="form-control bg-dark text-light border-secondary" id="email" placeholder="user@example.com">
-                </div>
-                <div class="col-md-6 d-flex align-items-end">
-                    <button type="submit" class="btn btn-primary w-100">
-                        <i class="fas fa-save me-2"></i>Save Settings
-                    </button>
-                </div>
+        <h5 class="card-title text-white"><i class="fas fa-cog me-2"></i>Account Settings</h5>
+        <form method="post">
+            <div class="mb-3">
+                <label for="demo_balance" class="form-label text-white">Demo Balance ($)</label>
+                <input type="number" class="form-control bg-dark text-light border-secondary" id="demo_balance" name="demo_balance" value="{{ demo_balance }}" min="1" step="0.01" required>
             </div>
+            <button type="submit" class="btn btn-primary">Save Changes</button>
+            {% if error %}
+                <p class="text-danger mt-2">{{ error }}</p>
+            {% endif %}
+            {% if success %}
+                <p class="text-success mt-2">{{ success }}</p>
+            {% endif %}
         </form>
     </div>
 </div>

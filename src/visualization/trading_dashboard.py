@@ -2,7 +2,7 @@ import os
 import datetime
 import logging
 import numpy as np
-from quart import Quart, render_template, request, Response, jsonify
+from quart import Quart, render_template, request, Response, jsonify, session
 from ib_insync import IB, Stock, util
 import pandas as pd
 import plotly.graph_objects as go
@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 # Initialize Quart app
 app = Quart(__name__, static_url_path='/static')
 app.static_folder = os.path.abspath(os.path.join(os.path.dirname(__file__), 'static'))
+
+# Session configuration for demo balance
+app.secret_key = os.urandom(24)  # Secure key for session management
 
 # Supported TWS API bar sizes and their maximum duration strings
 SUPPORTED_DURATIONS = {
@@ -54,17 +57,15 @@ BAR_SIZE_MULTIPLIERS = {
 }
 
 class MarketDataVisualizer:
-    def __init__(self, ticker, start_date=None, end_date=None, lookback_multiplier=None, bar_size='1 day'):
+    def __init__(self, ticker, start_date=None, end_date=None, bar_size='1 day'):
         self.ticker = ticker.upper()
         eastern = timezone('US/Eastern')
-        if lookback_multiplier is not None:
-            self.end_date = eastern.localize(datetime.datetime.now())
-            multiplier = int(lookback_multiplier)
-            minutes = BAR_SIZE_MULTIPLIERS[bar_size] * multiplier
-            self.start_date = self.end_date - datetime.timedelta(minutes=minutes)
-        else:
+        if start_date and end_date:
             self.start_date = eastern.localize(datetime.datetime.strptime(start_date, "%Y-%m-%d"))
             self.end_date = eastern.localize(datetime.datetime.strptime(end_date, "%Y-%m-%d"))
+        else:
+            self.end_date = eastern.localize(datetime.datetime.now())
+            self.start_date = self.end_date - datetime.timedelta(days=365)  # Default to 1 year lookback
         self.bar_size = bar_size
         self.ib = None
         self.df = None
@@ -172,104 +173,131 @@ class MarketDataVisualizer:
                          (self.df['close'] < self.df['ema_200'])
         self.df.loc[sell_condition, 'signal'] = -1
 
-    def calculate_pnl_and_trades(self):
-        """Universal PNL and trade log calculation based on signals."""
+    def calculate_pnl_and_trades(self, demo_balance=10000):
+        """Calculate PNL and trade log based on signals, using a demo balance."""
         if self.df is None or self.df.empty or 'signal' not in self.df.columns:
             logger.error("No data or signals available for PNL calculation")
             return
         
         # Ensure signals are valid (1 = buy, -1 = sell, 0 = hold)
-        self.df['signal'] = self.df['signal'].fillna(0)
-        self.df['position'] = self.df['signal'].shift(1)  # Position held on next bar
+        self.df['signal'] = self.df['signal'].fillna(0).astype(int)
+        self.df['position'] = self.df['signal'].shift(1).astype(int)  # Position held on next bar
         
-        # Calculate daily returns and strategy returns
-        self.df['daily_return'] = self.df['close'].pct_change()
-        self.df['strategy_return'] = self.df['position'] * self.df['daily_return']
-        self.df['cumulative_return'] = (1 + self.df['strategy_return']).cumprod() - 1
-        self.df['pnl_percent'] = self.df['strategy_return'] * 100  # Daily PNL % for chart
-        
-        # Trade log
+        # Initialize demo balance tracking as float for consistency
+        self.df['balance'] = float(demo_balance)
+        self.df['shares'] = 0
+        self.df['value'] = 0.0  # Ensure float for value
+
         trades = []
         position = 0
-        entry_price = 0
+        shares = 0
+        current_balance = float(demo_balance)
+
         for i in range(1, len(self.df)):
-            current_signal = int(self.df['signal'].iloc[i])
-            prev_position = int(self.df['position'].iloc[i] or 0)
+            current_signal = self.df['signal'].iloc[i]
+            prev_position = self.df['position'].iloc[i] if not pd.isna(self.df['position'].iloc[i]) else 0
+            current_price = float(self.df['close'].iloc[i])  # Ensure float for price
             
             if current_signal == 1 and prev_position != 1:  # Enter long
                 if position == -1:  # Close short
-                    exit_price = self.df['close'].iloc[i]
-                    pnl_percent = ((entry_price - exit_price) / entry_price) * 100  # Short: sell high, buy low
+                    exit_price = current_price
+                    shares_sold = shares
+                    pnl = (exit_price - float(self.df['close'].iloc[i-1])) * shares_sold
+                    current_balance += pnl
                     trades.append({
                         'Date': self.df.index[i].strftime('%Y-%m-%d'),
                         'Action': 'Buy (Close Short)',
                         'Price': exit_price,
-                        'PNL %': f"{pnl_percent:+.2f}"
+                        'PNL %': f"{((pnl / (current_balance - pnl)) * 100):+.2f}"
                     })
-                entry_price = self.df['close'].iloc[i]
-                position = 1
-                trades.append({
-                    'Date': self.df.index[i].strftime('%Y-%m-%d'),
-                    'Action': 'Buy',
-                    'Price': entry_price,
-                    'PNL %': 'N/A'
-                })
+                    shares = 0
+                # Buy with available balance
+                shares_to_buy = int(current_balance // current_price)
+                if shares_to_buy > 0:
+                    current_balance -= shares_to_buy * current_price
+                    shares = shares_to_buy
+                    position = 1
+                    trades.append({
+                        'Date': self.df.index[i].strftime('%Y-%m-%d'),
+                        'Action': 'Buy',
+                        'Price': current_price,
+                        'PNL %': 'N/A'
+                    })
+            
             elif current_signal == -1 and prev_position != -1:  # Enter short
                 if position == 1:  # Close long
-                    exit_price = self.df['close'].iloc[i]
-                    pnl_percent = ((exit_price - entry_price) / entry_price) * 100
+                    exit_price = current_price
+                    shares_sold = shares
+                    pnl = (float(self.df['close'].iloc[i-1]) - exit_price) * shares_sold
+                    current_balance += pnl
                     trades.append({
                         'Date': self.df.index[i].strftime('%Y-%m-%d'),
                         'Action': 'Sell (Close Long)',
                         'Price': exit_price,
-                        'PNL %': f"{pnl_percent:+.2f}"
+                        'PNL %': f"{((pnl / (current_balance - pnl)) * 100):+.2f}"
                     })
-                entry_price = self.df['close'].iloc[i]
-                position = -1
-                trades.append({
-                    'Date': self.df.index[i].strftime('%Y-%m-%d'),
-                    'Action': 'Sell',
-                    'Price': entry_price,
-                    'PNL %': 'N/A'
-                })
+                    shares = 0
+                # Short (borrow shares, assuming we can short with full balance)
+                shares_to_short = int(current_balance // current_price)
+                if shares_to_short > 0:
+                    shares = shares_to_short
+                    position = -1
+                    trades.append({
+                        'Date': self.df.index[i].strftime('%Y-%m-%d'),
+                        'Action': 'Sell',
+                        'Price': current_price,
+                        'PNL %': 'N/A'
+                    })
+            
             elif current_signal == 0 and prev_position != 0:  # Exit position
-                exit_price = self.df['close'].iloc[i]
+                exit_price = current_price
                 if position == 1:  # Close long
-                    pnl_percent = ((exit_price - entry_price) / entry_price) * 100
+                    pnl = (exit_price - float(self.df['close'].iloc[i-1])) * shares
+                    current_balance += pnl
                     trades.append({
                         'Date': self.df.index[i].strftime('%Y-%m-%d'),
                         'Action': 'Sell',
                         'Price': exit_price,
-                        'PNL %': f"{pnl_percent:+.2f}"
+                        'PNL %': f"{((pnl / (current_balance - pnl)) * 100):+.2f}"
                     })
                 elif position == -1:  # Close short
-                    pnl_percent = ((entry_price - exit_price) / entry_price) * 100
+                    pnl = (float(self.df['close'].iloc[i-1]) - exit_price) * shares
+                    current_balance += pnl
                     trades.append({
                         'Date': self.df.index[i].strftime('%Y-%m-%d'),
                         'Action': 'Buy',
                         'Price': exit_price,
-                        'PNL %': f"{pnl_percent:+.2f}"
+                        'PNL %': f"{((pnl / (current_balance - pnl)) * 100):+.2f}"
                     })
+                shares = 0
                 position = 0
-        
-        # Summary metrics
-        total_return = self.df['cumulative_return'].iloc[-1] * 100
-        daily_returns = self.df['strategy_return'].dropna()
-        cumulative_max = self.df['cumulative_return'].cummax()
-        drawdowns = (cumulative_max - self.df['cumulative_return']) / (1 + cumulative_max)
+            
+            # Update balance and shares in DataFrame as floats
+            self.df.loc[self.df.index[i], 'balance'] = float(current_balance)
+            self.df.loc[self.df.index[i], 'shares'] = int(shares)
+            self.df.loc[self.df.index[i], 'value'] = float(shares * current_price) if shares > 0 else 0.0
+
+        # Calculate metrics
+        total_return = ((current_balance - demo_balance) / demo_balance) * 100
+        daily_returns = self.df['balance'].pct_change().dropna()
+        cumulative_max = self.df['balance'].cummax()
+        drawdowns = (cumulative_max - self.df['balance']) / (demo_balance + cumulative_max)
         max_drawdown = drawdowns.max() * 100
         sharpe_ratio = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252) if daily_returns.std() != 0 else 0
         
+        self.df['pnl_percent'] = self.df['balance'].pct_change() * 100  # Daily PNL % for chart
+
         self.backtest_results = {
-            'pnl_df': self.df[['pnl_percent']].copy(),
+            'pnl_df': self.df[['pnl_percent', 'balance', 'shares', 'value']].copy().astype(float),  # Ensure float for all numeric columns
             'trade_log': trades,
             'total_return': total_return,
-            'max_drawdown': max_drawdown,
-            'sharpe_ratio': sharpe_ratio
+            'max_drawn down': max_drawdown,
+            'sharpe_ratio': sharpe_ratio,
+            'final_balance': current_balance
         }
 
-    async def create_interactive_chart(self, is_backtest=False):
-        """Create an interactive chart with PNL and trade log for backtest."""
+    async def create_interactive_chart(self, demo_balance=10000):
+        """Create an interactive chart with PNL and trade log for backtesting only."""
         try:
             df = await self.fetch_historical_data()
             if df is None or df.empty:
@@ -281,103 +309,93 @@ class MarketDataVisualizer:
 
             total_days = (self.end_date - self.start_date).days
 
+            # Create candlestick and volume traces
             candlestick = go.Candlestick(
                 x=df.index,
-                open=df['open'],
-                high=df['high'],
-                low=df['low'],
-                close=df['close'],
+                open=df['open'].astype(float),
+                high=df['high'].astype(float),
+                low=df['low'].astype(float),
+                close=df['close'].astype(float),
                 name='Price'
             )
             volume_colors = ['green' if (df['close'] > df['open']).iloc[i] else 'red' for i in range(len(df))]
-            volume = go.Bar(x=df.index, y=df['volume'], name='Volume', marker_color=volume_colors, opacity=0.6)
+            volume = go.Bar(x=df.index, y=df['volume'].astype(float), name='Volume', marker_color=volume_colors, opacity=0.6)
 
-            if is_backtest:
-                self.df = df
-                self.generate_ema_signals()  # Generate EMA-based signals
-                self.calculate_pnl_and_trades()
-                if not self.backtest_results:
-                    return {'error': 'Backtest calculation failed'}
+            # Perform backtest
+            self.df = df
+            self.generate_ema_signals()
+            self.calculate_pnl_and_trades(demo_balance=demo_balance)
+            if not self.backtest_results:
+                return {'error': 'Backtest calculation failed'}
 
-                # Create only the price and volume chart
-                fig = make_subplots(
-                    rows=2, cols=1,
-                    shared_xaxes=True,
-                    vertical_spacing=0.1,
-                    row_heights=[0.7, 0.3],
-                    specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
-                )
-                fig.add_trace(candlestick, row=1, col=1, secondary_y=False)
-                fig.add_trace(volume, row=2, col=1, secondary_y=False)
-                fig.update_layout(
-                    title=f'{self.ticker} Backtest ({self.bar_size}, {total_days} days)',
-                    template='plotly_dark',  # Matches your dark theme
-                    height=800,
-                    width=800,  # Narrower width to leave space for PNL and trade log on the right
-                    xaxis_rangeslider_visible=False,
-                    showlegend=True,
-                    yaxis1=dict(title='Price', showgrid=True),
-                    yaxis2=dict(title='Volume', showgrid=True),
-                    xaxis2=dict(title='Date', showgrid=True)
-                )
+            # Create only the price and volume chart
+            fig = make_subplots(
+                rows=2, cols=1,
+                shared_xaxes=True,
+                vertical_spacing=0.1,
+                row_heights=[0.7, 0.3],
+                specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
+            )
+            fig.add_trace(candlestick, row=1, col=1, secondary_y=False)
+            fig.add_trace(volume, row=2, col=1, secondary_y=False)
+            fig.update_layout(
+                title=f'{self.ticker} Backtest ({self.bar_size}, {total_days} days)',
+                template='plotly_dark',
+                height=600,  # Reduced height to fit better with layout
+                width=800,
+                xaxis_rangeslider_visible=False,
+                showlegend=True,
+                yaxis1=dict(title='Price', showgrid=True),
+                yaxis2=dict(title='Volume', showgrid=True),
+                xaxis2=dict(title='Date', showgrid=True)
+            )
 
-                # Prepare PNL data for a separate chart
-                pnl_data = {
-                    'x': self.backtest_results['pnl_df'].index.tolist(),
-                    'y': self.backtest_results['pnl_df']['pnl_percent'].tolist(),
-                    'type': 'bar',
-                    'name': 'PNL %',
-                    'marker': {'color': ['green' if x > 0 else 'red' for x in self.backtest_results['pnl_df']['pnl_percent']], 'opacity': 0.8}
-                }
+            # Prepare PNL data for a separate chart
+            pnl_data = {
+                'x': self.backtest_results['pnl_df'].index.tolist(),
+                'y': self.backtest_results['pnl_df']['pnl_percent'].tolist(),
+                'type': 'bar',
+                'name': 'PNL %',
+                'marker': {'color': ['green' if x > 0 else 'red' for x in self.backtest_results['pnl_df']['pnl_percent']], 'opacity': 0.8}
+            }
 
-                # Prepare trade log data for a table
-                trade_log = {
+            # Prepare trade log data for a table
+            trade_log = {
+                'data': [{
+                    'type': 'table',
                     'header': {'values': ['Date', 'Action', 'Price', 'PNL %'], 'fill_color': 'paleturquoise', 'align': 'left'},
                     'cells': {
                         'values': [
                             [t['Date'] for t in self.backtest_results['trade_log']],
                             [t['Action'] for t in self.backtest_results['trade_log']],
-                            [f"{t['Price']:.2f}" for t in self.backtest_results['trade_log']],
+                            [f"${t['Price']:.2f}" for t in self.backtest_results['trade_log']],
                             [t['PNL %'] for t in self.backtest_results['trade_log']]
                         ],
                         'align': 'left'
                     }
+                }],
+                'layout': {
+                    'template': 'plotly_dark',
+                    'height': 300,
+                    'width': null
                 }
+            }
 
-                chart_json = pio.to_json(fig)
-                return {
-                    'chart_json': json.loads(chart_json),
-                    'pnl_data': pnl_data,
-                    'trade_log': trade_log
+            chart_json = pio.to_json(fig)
+            return {
+                'chart_json': json.loads(chart_json),
+                'pnl_data': pnl_data,
+                'trade_log': trade_log,
+                'metrics': {
+                    'total_return': self.backtest_results['total_return'],
+                    'max_drawdown': self.backtest_results['max_drawdown'],
+                    'sharpe_ratio': self.backtest_results['sharpe_ratio'],
+                    'final_balance': self.backtest_results['final_balance']
                 }
-
-            else:
-                # Non-backtest chart (price and volume only)
-                fig = make_subplots(
-                    rows=2, cols=1,
-                    shared_xaxes=True,
-                    vertical_spacing=0.1,
-                    row_heights=[0.7, 0.3],
-                    specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
-                )
-                fig.add_trace(candlestick, row=1, col=1, secondary_y=False)
-                fig.add_trace(volume, row=2, col=1, secondary_y=False)
-                fig.update_layout(
-                    title=f'{self.ticker} Price and Volume ({self.bar_size}, {total_days} days)',
-                    template='plotly_dark',
-                    height=800,
-                    width=800,
-                    xaxis_rangeslider_visible=False,
-                    showlegend=True,
-                    yaxis1=dict(title='Price', showgrid=True),
-                    yaxis2=dict(title='Volume', showgrid=True),
-                    xaxis2=dict(title='Date', showgrid=True)
-                )
-
-                chart_json = pio.to_json(fig)
-                return {'chart_json': json.loads(chart_json)}
+            }
 
         except Exception as e:
+            logger.error(f"Error in create_interactive_chart: {str(e)}")
             return {'error': f"Error generating chart: {str(e)}"}
 
 # Routes
@@ -386,160 +404,196 @@ async def index():
     """Render the landing page."""
     return await render_template('home.html')
 
-@app.route('/dashboard')
-async def dashboard():
-    """Render the dashboard with an initial chart."""
-    ticker = "AAPL"
-    start_date = "2024-01-01"
-    end_date = "2024-12-31"
-    bar_size = "1 day"
-    visualizer = MarketDataVisualizer(ticker, start_date=start_date, end_date=end_date, bar_size=bar_size)
-    chart_json = await visualizer.create_interactive_chart()
-    if 'error' in chart_json:
-        chart_html = f"<div style='color: red; text-align: center;'>{chart_json['error']}</div>"
+@app.route('/trading', methods=['GET', 'POST'])
+async def trading():
+    """Render the backtest-only trading page."""
+    if request.method == 'POST':
+        form = await request.form
+        ticker = form.get('ticker', 'AAPL').strip()
+        start_date = form.get('start_date', '2024-01-01').strip()
+        end_date = form.get('end_date', '2024-12-31').strip()
+        bar_size = form.get('bar_size', '1 day').strip()
+        demo_balance = float(session.get('demo_balance', 10000))  # Use session value, non-editable here
+
+        visualizer = MarketDataVisualizer(ticker, start_date=start_date, end_date=end_date, bar_size=bar_size)
+        chart_json = await visualizer.create_interactive_chart(demo_balance=demo_balance)
+        if 'error' in chart_json:
+            chart_html = f"<div style='color: red; text-align: center;'>{chart_json['error']}</div>"
+            metrics = {'total_return': 0, 'max_drawdown': 0, 'sharpe_ratio': 0, 'final_balance': demo_balance}
+            pnl_data = None
+            trade_log = None
+        else:
+            fig = go.Figure(data=chart_json['chart_json']['data'], layout=chart_json['chart_json']['layout'])
+            chart_html = fig.to_html(full_html=False, include_plotlyjs='cdn', div_id="trading-chart")
+            metrics = chart_json['metrics']
+            pnl_data = chart_json.get('pnl_data')
+            trade_log = chart_json.get('trade_log')
+
+        return await render_template(
+            'trading.html',
+            chart_html=chart_html,
+            ticker=ticker,
+            start_date=start_date,
+            end_date=end_date,
+            bar_sizes=SUPPORTED_DURATIONS.keys(),
+            selected_bar_size=bar_size,
+            total_return=f"{metrics['total_return']:+.2f}",
+            max_drawdown=f"-{metrics['max_drawdown']:.2f}",
+            sharpe_ratio=f"{metrics['sharpe_ratio']:.2f}",
+            final_balance=metrics['final_balance'],
+            pnl_data=pnl_data,
+            trade_log=trade_log,
+            demo_balance=demo_balance  # Pass as a number for display only
+        )
     else:
-        # Create a Plotly figure from the chart_json['data'] and chart_json['layout']
-        fig = go.Figure(data=chart_json['chart_json']['data'], layout=chart_json['chart_json']['layout'])
-        chart_html = fig.to_html(full_html=False, include_plotlyjs='cdn', div_id="chart-1")
-    return await render_template(
-        'dashboard.html',
-        chart_html=chart_html,
-        ticker=ticker,
-        start_date=start_date,
-        end_date=end_date,
-        lookback_multiplier='',
-        bar_sizes=SUPPORTED_DURATIONS.keys(),
-        selected_bar_size=bar_size
-    )
+        # Default GET request for initial page load
+        ticker = "AAPL"
+        start_date = "2024-01-01"
+        end_date = "2024-12-31"
+        bar_size = "1 day"
+        demo_balance = float(session.get('demo_balance', 10000))  # Use session value, non-editable
+
+        return await render_template(
+            'trading.html',
+            chart_html='<div style="color: gray; text-align: center;">Run a backtest to see results.</div>',
+            ticker=ticker,
+            start_date=start_date,
+            end_date=end_date,
+            bar_sizes=SUPPORTED_DURATIONS.keys(),
+            selected_bar_size=bar_size,
+            total_return="0.00%",
+            max_drawdown="0.00%",
+            sharpe_ratio="0.00",
+            final_balance=demo_balance,
+            pnl_data=None,
+            trade_log=None,
+            demo_balance=demo_balance  # Pass as a number for display only
+        )
+
+@app.route('/backtest', methods=['POST'])
+async def run_backtest():
+    """Handle backtest form submission."""
+    form = await request.form
+    ticker = form.get('ticker', 'AAPL').strip()
+    start_date = form.get('start_date', '2024-01-01').strip()
+    end_date = form.get('end_date', '2024-12-31').strip()
+    bar_size = form.get('bar_size', '1 day').strip()
+    demo_balance = float(session.get('demo_balance', 10000))  # Use session value, non-editable here
+
+    visualizer = MarketDataVisualizer(ticker, start_date=start_date, end_date=end_date, bar_size=bar_size)
+    chart_json = await visualizer.create_interactive_chart(demo_balance=demo_balance)
+    if 'error' in chart_json:
+        return jsonify({'error': chart_json['error']}), 400
+    
+    metrics = {
+        'total_return': chart_json['metrics']['total_return'],
+        'max_drawdown': chart_json['metrics']['max_drawdown'],
+        'sharpe_ratio': chart_json['metrics']['sharpe_ratio'],
+        'final_balance': chart_json['metrics']['final_balance'],
+        'chart_json': chart_json['chart_json'],
+        'pnl_data': chart_json.get('pnl_data'),
+        'trade_log': chart_json.get('trade_log')
+    }
+    return jsonify(metrics)
+
+@app.route('/set_demo_balance', methods=['POST'])
+async def set_demo_balance():
+    """Set or update the user's demo balance (only editable in Settings)."""
+    form = await request.form
+    demo_balance = float(form.get('demo_balance', 10000))
+    if demo_balance <= 0:
+        return jsonify({'error': 'Demo balance must be positive'}), 400
+    session['demo_balance'] = demo_balance
+    return jsonify({'demo_balance': demo_balance, 'success': True})
 
 @app.route('/strategies')
 async def strategies():
     """Render the strategies page."""
     return await render_template('strategies.html')
 
-@app.route('/portfolio')
+@app.route('/portfolio', methods=['GET', 'POST'])
 async def portfolio():
-    """Render the portfolio page."""
-    return await render_template('portfolio.html')
-
-@app.route('/backtest')
-async def backtest():
-    """Render the backtest page with an initial chart."""
-    ticker = "AAPL"
-    start_date = "2024-01-01"
-    end_date = "2024-12-31"
-    bar_size = "1 day"
-    visualizer = MarketDataVisualizer(ticker, start_date=start_date, end_date=end_date, bar_size=bar_size)
-    chart_json = await visualizer.create_interactive_chart(is_backtest=True)
-    if 'error' in chart_json:
-        chart_html = f"<div style='color: red;'>{chart_json['error']}</div>"
-        metrics = {'total_return': 0, 'max_drawdown': 0, 'sharpe_ratio': 0}
-        pnl_data = None
-        trade_log = None
-    else:
-        # Create a Plotly figure from the chart_json['chart_json']['data'] and chart_json['chart_json']['layout']
-        fig = go.Figure(data=chart_json['chart_json']['data'], layout=chart_json['chart_json']['layout'])
-        chart_html = fig.to_html(full_html=False, include_plotlyjs='cdn', div_id="backtest-chart")
-        metrics = {
-            'total_return': visualizer.backtest_results['total_return'],
-            'max_drawdown': visualizer.backtest_results['max_drawdown'],
-            'sharpe_ratio': visualizer.backtest_results['sharpe_ratio']
+    """Render and update the portfolio page with live data, reflecting changes from other pages."""
+    if 'portfolio' not in session:
+        session['portfolio'] = {
+            'AAPL': {'shares': 100, 'price': 175.30, 'value': 17530.00, 'change': 1.2},
+            'TSLA': {'shares': 50, 'price': 210.45, 'value': 10522.50, 'change': -0.8}
         }
-        pnl_data = chart_json.get('pnl_data')
-        trade_log = chart_json.get('trade_log')
+    
+    if request.method == 'POST':
+        form = await request.form
+        action = form.get('action')
+        ticker = form.get('ticker')
+        shares = int(form.get('shares', 0))
+        
+        if action == 'buy' and ticker and shares > 0:
+            visualizer = MarketDataVisualizer(ticker)
+            df = await visualizer.fetch_historical_data()
+            current_price = df['close'].iloc[-1] if not df.empty else 0
+            if current_price > 0:
+                current_balance = session.get('demo_balance', 10000)
+                cost = current_price * shares
+                if cost <= current_balance:
+                    if ticker in session['portfolio']:
+                        session['portfolio'][ticker]['shares'] += shares
+                        session['portfolio'][ticker]['value'] += cost
+                    else:
+                        session['portfolio'][ticker] = {'shares': shares, 'price': current_price, 'value': cost, 'change': 0}
+                    session['demo_balance'] = current_balance - cost
+                    # Update price and change with live data
+                    session['portfolio'][ticker]['price'] = current_price
+                    session['portfolio'][ticker]['change'] = np.random.uniform(-2, 2)  # Simulate price change
+        elif action == 'sell' and ticker and shares > 0:
+            if ticker in session['portfolio']:
+                if session['portfolio'][ticker]['shares'] >= shares:
+                    visualizer = MarketDataVisualizer(ticker)
+                    df = await visualizer.fetch_historical_data()
+                    current_price = df['close'].iloc[-1] if not df.empty else 0
+                    if current_price > 0:
+                        revenue = current_price * shares
+                        session['portfolio'][ticker]['shares'] -= shares
+                        session['portfolio'][ticker]['value'] -= revenue
+                        session['portfolio'][ticker]['price'] = current_price
+                        session['portfolio'][ticker]['change'] = np.random.uniform(-2, 2)  # Simulate price change
+                        current_balance = session.get('demo_balance', 10000)
+                        session['demo_balance'] = current_balance + revenue
+                        if session['portfolio'][ticker]['shares'] == 0:
+                            del session['portfolio'][ticker]
+
+        # Calculate portfolio metrics
+        total_value = sum(item['value'] for item in session['portfolio'].values())
+        total_change = sum(item['change'] for item in session['portfolio'].values()) / len(session['portfolio']) if session['portfolio'] else 0
+
+    else:
+        total_value = sum(item['value'] for item in session['portfolio'].values())
+        total_change = sum(item['change'] for item in session['portfolio'].values()) / len(session['portfolio']) if session['portfolio'] else 0
+
     return await render_template(
-        'backtest.html',
-        chart_html=chart_html,
-        ticker=ticker,
-        start_date=start_date,
-        end_date=end_date,
-        lookback_multiplier='',
-        bar_sizes=SUPPORTED_DURATIONS.keys(),
-        selected_bar_size=bar_size,
-        total_return=f"{metrics['total_return']:+.2f}",
-        max_drawdown=f"-{metrics['max_drawdown']:.2f}",
-        sharpe_ratio=f"{metrics['sharpe_ratio']:.2f}",
-        pnl_data=pnl_data,
-        trade_log=trade_log
+        'portfolio.html',
+        portfolio=session['portfolio'],
+        total_value=f"${total_value:.2f}",
+        total_change=f"{total_change:+.2f}%",
+        demo_balance=session.get('demo_balance', 10000)  # Reflects changes from Settings or Trading
     )
 
-@app.route('/settings')
+@app.route('/settings', methods=['GET', 'POST'])
 async def settings():
-    """Render the settings page."""
-    return await render_template('settings.html')
+    """Render the settings page with demo balance option (editable here), reflecting changes across pages."""
+    if request.method == 'POST':
+        form = await request.form
+        demo_balance = float(form.get('demo_balance', session.get('demo_balance', 10000)))
+        if demo_balance <= 0:
+            return await render_template('settings.html', demo_balance=session.get('demo_balance', 10000), error="Demo balance must be positive")
+        session['demo_balance'] = demo_balance
+        return await render_template('settings.html', demo_balance=demo_balance, success="Demo balance updated successfully")
+
+    demo_balance = session.get('demo_balance', 10000)
+    return await render_template('settings.html', demo_balance=demo_balance)
 
 @app.route('/logs')
 async def logs():
     """Render the logs page."""
     return await render_template('logs.html')
-
-@app.route('/generate_chart', methods=['POST'])
-async def generate_chart():
-    """Handle chart generation requests from the frontend and return JSON."""
-    form = await request.form
-    ticker = form['ticker'].strip()
-    start_date = form.get('start_date', '').strip()
-    end_date = form.get('end_date', '').strip()
-    lookback_multiplier = form.get('lookback_multiplier', '').strip()
-    bar_size = form.get('bar_size', '1 day').strip()
-
-    logger.info(f"Received request: ticker={ticker}, start_date={start_date}, end_date={end_date}, lookback_multiplier={lookback_multiplier}, bar_size={bar_size}")
-    try:
-        if lookback_multiplier:
-            if not lookback_multiplier.isdigit():
-                raise ValueError("Lookback multiplier must be a positive integer")
-            lookback_multiplier = int(lookback_multiplier)
-            if lookback_multiplier <= 0:
-                raise ValueError("Lookback multiplier must be greater than 0")
-            visualizer = MarketDataVisualizer(ticker, lookback_multiplier=lookback_multiplier, bar_size=bar_size)
-        else:
-            if not (start_date and end_date):
-                raise ValueError("Please provide both start date and end date, or use a lookback multiplier")
-            start = datetime.datetime.strptime(start_date, "%Y-%m-%d")
-            end = datetime.datetime.strptime(end_date, "%Y-%m-%d")
-            if end <= start:
-                return jsonify({'error': 'End date must be after start date'}), 400
-            visualizer = MarketDataVisualizer(ticker, start_date=start_date, end_date=end_date, bar_size=bar_size)
-
-        if bar_size not in SUPPORTED_DURATIONS:
-            return jsonify({'error': f"Invalid bar_size: {bar_size}"}), 400
-
-        chart_json = await visualizer.create_interactive_chart()
-        if 'error' in chart_json:
-            return jsonify(chart_json), 400
-
-        return jsonify(chart_json)
-    
-    except ValueError as e:
-        return jsonify({'error': f"Invalid input: {str(e)}"}), 400
-    except Exception as e:
-        logger.error(f"Unexpected error in generate_chart: {str(e)}", exc_info=True)
-        return jsonify({'error': f"Error: {str(e)}"}), 500
-
-@app.route('/run_backtest', methods=['POST'])
-async def run_backtest():
-    """Handle backtest form submission."""
-    form = await request.form
-    ticker = form.get('ticker', 'AAPL').strip()
-    start_date = form['start_date'].strip()
-    end_date = form['end_date'].strip()
-    bar_size = form.get('bar_size', '1 day').strip()
-    # Strategy parameter ignored since we're hardcoding EMA crossover for now
-
-    visualizer = MarketDataVisualizer(ticker, start_date=start_date, end_date=end_date, bar_size=bar_size)
-    chart_json = await visualizer.create_interactive_chart(is_backtest=True)
-    if 'error' in chart_json:
-        return jsonify({'error': chart_json['error']}), 400
-    
-    metrics = {
-        'total_return': visualizer.backtest_results['total_return'],
-        'max_drawdown': visualizer.backtest_results['max_drawdown'],
-        'sharpe_ratio': visualizer.backtest_results['sharpe_ratio'],
-        'chart_json': chart_json['chart_json'],  # Extract just the chart data
-        'pnl_data': chart_json.get('pnl_data'),
-        'trade_log': chart_json.get('trade_log')
-    }
-    return jsonify(metrics)
 
 if __name__ == "__main__":
     app.run(debug=True)
