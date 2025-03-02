@@ -1,10 +1,11 @@
 import os
+import datetime
+from quart import Quart, render_template, request, Response
 from ib_insync import IB, Stock, util
 import pandas as pd
 import plotly.graph_objects as go
-import datetime
-from quart import Quart, render_template, request, Response
 
+# Initialize Quart app
 app = Quart(__name__, static_url_path='/static')
 app.static_folder = os.path.abspath(os.path.join(os.path.dirname(__file__), 'static'))
 
@@ -108,7 +109,6 @@ class MarketDataVisualizer:
             )
 
             fig = go.Figure(data=[candlestick, volume], layout=layout)
-            # Use the latest stable Plotly.js version from CDN
             chart_html = fig.to_html(full_html=False, include_plotlyjs='https://cdn.plot.ly/plotly-2.34.0.min.js', div_id="chart-1")
             print(f"Chart HTML generated. Length: {len(chart_html)}")
             print(f"Chart HTML snippet: {chart_html[:500]}...")
@@ -121,10 +121,17 @@ class MarketDataVisualizer:
 
 @app.route('/')
 async def index():
-    return await render_template('index.html', ticker="AAPL", start_date="2024-01-01", end_date="2024-12-31")
+    """Render the main dashboard with an initial chart."""
+    ticker = "AAPL"
+    start_date = "2024-01-01"
+    end_date = "2024-12-31"
+    visualizer = MarketDataVisualizer(ticker, start_date, end_date)
+    chart_html = await visualizer.create_interactive_chart()
+    return await render_template('ib_trading_chart.html', chart_html=chart_html, ticker=ticker, start_date=start_date, end_date=end_date)
 
 @app.route('/generate_chart', methods=['POST'])
 async def generate_chart():
+    """Handle chart generation requests from the frontend."""
     form = await request.form
     ticker = form['ticker'].strip()
     start_date = form['start_date'].strip()
@@ -148,5 +155,4 @@ async def generate_chart():
     except Exception as e:
         return f"Error: {str(e)}", 500
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8000)
+# No if __name__ == "__main__": block; Uvicorn runs the app directly

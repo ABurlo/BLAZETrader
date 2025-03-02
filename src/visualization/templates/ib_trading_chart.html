@@ -1,14 +1,33 @@
-<!-- templates/ib_trading_chart.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <title>Trading Dashboard</title>
+    <style>
+        #chart-1 { height: 800px; width: 100%; }
+    </style>
 </head>
 <body>
-    <!-- The chart is written directly by Plotly, so this can be minimal -->
-    <h1>Trading Dashboard</h1>
-    <p>Chart generated at: templates/ib_trading_chart.html</p>
-    <!-- Note: You may want to serve the generated file directly instead -->
+    <h1>Interactive Trading Dashboard</h1>
+    <form method="POST" action="/generate_chart">
+        <label for="ticker">Ticker:</label>
+        <input type="text" id="ticker" name="ticker" value="{{ ticker }}">
+        <label for="start_date">Start Date:</label>
+        <input type="date" id="start_date" name="start_date" value="{{ start_date }}">
+        <label for="end_date">End Date:</label>
+        <input type="date" id="end_date" name="end_date" value="{{ end_date }}">
+        <button type="submit">Generate Chart</button>
+    </form>
+    <div id="chart-container">{{ chart_html | safe }}</div>
+    <script>
+        document.addEventListener("DOMContentLoaded", function() {
+            console.log("DOM loaded, checking chart");
+            if (!document.querySelector("#chart-1 .plotly")) {
+                console.error("Chart failed to render");
+            } else {
+                console.log("Chart rendered successfully");
+            }
+        });
+    </script>
 </body>
 </html>
