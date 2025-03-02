@@ -1,83 +1,98 @@
-/* static/css/style.css */
-
+/* Reset default margins and paddings */
 * {
     margin: 0;
     padding: 0;
     box-sizing: border-box;
 }
 
+/* Body styling for dark theme and flex layout */
 body {
     font-family: Arial, sans-serif;
-    background-color: #1a1a1a; /* Dark background for consistency with Bootstrap dark theme */
-    color: #f8f9fa; /* Light text for dark theme */
+    background-color: #1a1a1a; /* Dark charcoal background */
+    color: #f8f9fa; /* Light gray text */
     display: flex;
     min-height: 100vh;
     flex-direction: column;
 }
 
-header {
-    background-color: #2c3e50; /* Dark blue header, consistent with your navigation */
-    color: #ecf0f1; /* Light text */
+/* Navbar styling (adjusted to match your Bootstrap navbar) */
+.navbar {
+    background-color: #2c3e50; /* Dark blue consistent with your header */
     padding: 1rem;
-    text-align: center;
 }
 
-header h1 {
-    font-size: 24px;
-    margin-bottom: 0.5rem;
+.navbar-brand, .nav-link {
+    color: #ecf0f1 !important; /* Light text for navbar */
+    font-weight: 500;
 }
 
-nav a {
-    color: #f8f9fa; /* Light text for dark theme */
+.nav-link:hover, .nav-link.active {
+    color: #ff6b6b !important; /* Orange hover/active state */
     text-decoration: none;
-    margin: 0 1rem;
-    font-weight: bold;
 }
 
-nav a:hover {
-    text-decoration: underline;
-    color: #ff6b6b; /* Orange hover for consistency with your orange buttons */
+.navbar-toggler-icon {
+    background-image: url("data:image/svg+xml;charset=utf8,%3Csvg viewBox='0 0 30 30' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath stroke='rgba(255, 255, 255, 0.9)' stroke-width='2' stroke-linecap='round' stroke-miterlimit='10' d='M4 7h22M4 15h22M4 23h22'/%3E%3C/svg%3E");
 }
 
+/* Card styling */
 .card {
-    background-color: #2d2d2d; /* Slightly lighter dark for cards */
+    background-color: #2d2d2d; /* Slightly lighter dark gray */
     border: none;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2); /* Subtle shadow */
+    border-radius: 8px; /* Softer corners */
+    transition: transform 0.2s ease; /* Hover effect */
+}
+
+.card:hover {
+    transform: translateY(-2px); /* Slight lift on hover */
 }
 
 .card-title {
-    color: #f8f9fa;
+    color: #f8f9fa; /* Light text */
+    font-size: 1.25rem;
+    font-weight: 600;
 }
 
 .card-text, .form-label {
-    color: #c0c0c0; /* Lighter text for readability on dark background */
+    color: #c0c0c0; /* Light gray for readability */
 }
 
+/* Form controls */
 .form-control {
     background-color: #3a3a3a; /* Dark input background */
-    border-color: #4a4a4a; /* Darker border for inputs */
-    color: #f8f9fa; /* Light text for inputs */
+    border: 1px solid #4a4a4a; /* Darker border */
+    color: #f8f9fa; /* Light text */
+    border-radius: 6px;
+    transition: border-color 0.2s ease;
 }
 
 .form-control:focus {
     background-color: #3a3a3a;
-    border-color: #ff6b6b; /* Orange focus for consistency */
-    box-shadow: 0 0 0 0.25rem rgba(255, 107, 107, 0.25);
+    border-color: #ff6b6b; /* Orange focus */
+    box-shadow: 0 0 0 0.2rem rgba(255, 107, 107, 0.25); /* Subtle glow */
+    color: #f8f9fa;
 }
 
+/* Buttons */
 .btn-primary {
-    background-color: #ff6b6b; /* Orange button */
+    background-color: #ff6b6b; /* Orange primary */
     border-color: #ff6b6b;
+    font-weight: 500;
+    border-radius: 6px;
+    padding: 0.5rem 1rem;
+    transition: background-color 0.2s ease;
 }
 
 .btn-primary:hover {
-    background-color: #e65b5b; /* Slightly darker orange on hover */
+    background-color: #e65b5b; /* Darker orange on hover */
     border-color: #e65b5b;
 }
 
 .btn-success {
-    background-color: #28a745; /* Green for buy buttons */
+    background-color: #28a745; /* Green for buy */
     border-color: #28a745;
+    border-radius: 6px;
 }
 
 .btn-success:hover {
@@ -86,8 +101,9 @@ nav a:hover {
 }
 
 .btn-danger {
-    background-color: #dc3545; /* Red for sell buttons */
+    background-color: #dc3545; /* Red for sell */
     border-color: #dc3545;
+    border-radius: 6px;
 }
 
 .btn-danger:hover {
@@ -95,40 +111,72 @@ nav a:hover {
     border-color: #c82333;
 }
 
+/* Tables */
 .table-dark {
-    background-color: #2d2d2d; /* Dark table background */
+    background-color: #2d2d2d;
+    border-radius: 6px;
 }
 
 .table-dark th, .table-dark td {
-    color: #f8f9fa; /* Light text for tables */
-    border-color: #4a4a4a; /* Darker border for tables */
+    color: #f8f9fa; /* Light text */
+    border-color: #4a4a4a; /* Darker border */
+    padding: 0.75rem;
 }
 
 .table-hover tbody tr:hover {
-    background-color: #3a3a3a; /* Slightly lighter on hover for tables */
+    background-color: #3a3a3a; /* Hover effect */
 }
 
+/* Plotly chart containers */
 #trading-chart, #pnl-chart, #trade-log {
-    background-color: #2d2d2d; /* Dark background for chart containers */
+    background-color: #2d2d2d; /* Match card background */
+    border-radius: 8px;
+    padding: 10px; /* Padding for better spacing */
 }
 
-footer {
-    background-color: #2c3e50; /* Dark blue footer */
-    color: #ecf0f1; /* Light text */
-    text-align: center;
-    padding: 1rem;
-    margin-top: auto; /* Push to bottom */
-}
-
+/* Main content */
 main {
-    max-width: 1200px; /* Wider for charts and tables */
+    max-width: 1400px; /* Wider for charts and tables */
     margin: 2rem auto;
     padding: 0 1rem;
+    flex: 1; /* Allows content to grow and push footer down */
 }
 
 main h2 {
-    color: #f8f9fa; /* Light text for headings */
+    color: #f8f9fa;
+    font-size: 2rem;
+    margin-bottom: 1.5rem;
 }
 
-.text-info { color: #0dcaf0; }
-.text-success { color: #28a745; }
+/* Footer */
+footer {
+    background-color: #2c3e50; /* Dark blue footer */
+    color: #ecf0f1;
+    text-align: center;
+    padding: 1rem;
+    margin-top: auto; /* Ensures footer stays at bottom */
+    font-size: 0.9rem;
+}
+
+/* Utility classes */
+.text-info { color: #0dcaf0 !important; }
+.text-success { color: #28a745 !important; }
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    main {
+        padding: 0 0.5rem;
+    }
+
+    .card {
+        margin-bottom: 1rem;
+    }
+
+    .navbar-nav {
+        text-align: center;
+    }
+
+    .nav-link {
+        padding: 0.5rem 0;
+    }
+}

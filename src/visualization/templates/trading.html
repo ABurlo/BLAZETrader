@@ -47,7 +47,7 @@
             <div class="row">
                 <div class="col-md-3 mb-3">
                     <label for="demo_balance" class="form-label text-white">Demo Balance ($)</label>
-                    <input type="text" class="form-control bg-dark text-light border-secondary" id="demo_balance" name="demo_balance" value="{{ demo_balance|float|round(2) }}" readonly>
+                    <input type="text" class="form-control bg-dark text-light border-secondary" id="demo_balance" value="{{ demo_balance|float|round(2) }}" readonly>
                 </div>
             </div>
         </form>
@@ -77,7 +77,34 @@
                 <div id="pnl-chart" style="height: 300px;"></div>
 
                 <h5 class="mt-4 text-white"><i class="fas fa-table me-2"></i>Trade Log</h5>
-                <div id="trade-log" style="height: 300px; overflow-y: auto;"></div>
+                <div id="trade-log" style="height: 300px; overflow-y: auto;">
+                    <table class="table table-dark table-hover" id="trade-log-table">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Action</th>
+                                <th>Price</th>
+                                <th>PNL %</th>
+                            </tr>
+                        </thead>
+                        <tbody id="trade-log-body">
+                            {% if trade_log %}
+                                {% for trade in trade_log %}
+                                    <tr>
+                                        <td>{{ trade.Date }}</td>
+                                        <td>{{ trade.Action }}</td>
+                                        <td>${{ trade.Price|float|round(2) }}</td>
+                                        <td>{{ trade['PNL %'] }}</td>
+                                    </tr>
+                                {% endfor %}
+                            {% else %}
+                                <tr>
+                                    <td colspan="4" class="text-center">No trades available.</td>
+                                </tr>
+                            {% endif %}
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
     </div>
@@ -86,74 +113,66 @@
 <script>
 document.addEventListener('DOMContentLoaded', function () {
     const tradingForm = document.getElementById('trading-form');
-
     if (tradingForm) {
         tradingForm.addEventListener('submit', async function (e) {
             e.preventDefault();
             const formData = new FormData(tradingForm);
             const demo_balance = parseFloat(document.getElementById('demo_balance').value) || 10000;
+            formData.append('demo_balance', demo_balance);
 
             try {
                 const chartContainer = document.getElementById('trading-chart');
                 chartContainer.innerHTML = '<p>Loading chart...</p>';
 
-                formData.append('demo_balance', demo_balance);
                 const response = await fetch('/backtest', {
                     method: 'POST',
                     body: formData
                 });
+                const result = await response.json();
+                console.log('Backtest Result:', result);
 
                 if (!response.ok) {
-                    const errorText = await response.text();
-                    throw new Error(errorText || 'Failed to run backtest');
+                    throw new Error(result.error || 'Failed to run backtest');
                 }
 
-                const result = await response.json();
-                console.log('Backtest Result:', result); // Debug: Log the response to check data structure
-                if (response.ok) {
-                    // Update metrics
-                    document.getElementById('total-return').textContent = `${result.total_return.toFixed(2)}%`;
-                    document.getElementById('max-drawdown').textContent = `-${result.max_drawdown.toFixed(2)}%`;
-                    document.getElementById('sharpe-ratio').textContent = result.sharpe_ratio.toFixed(2);
-                    document.getElementById('final-balance').textContent = `$${result.final_balance.toFixed(2)}`;
+                // Update metrics
+                document.getElementById('total-return').textContent = `${result.total_return.toFixed(2)}%`;
+                document.getElementById('max-drawdown').textContent = `-${result.max_drawdown.toFixed(2)}%`;
+                document.getElementById('sharpe-ratio').textContent = result.sharpe_ratio.toFixed(2);
+                document.getElementById('final-balance').textContent = `$${result.final_balance.toFixed(2)}`;
 
-                    // Update main chart (Price and Volume)
-                    if (result.chart_json && result.chart_json.data && result.chart_json.layout) {
-                        Plotly.react('trading-chart', result.chart_json.data, result.chart_json.layout)
-                            .then(() => console.log('Price/Volume chart rendered successfully'))
-                            .catch(error => console.error('Error rendering price/volume chart:', error));
-                    } else {
-                        chartContainer.innerHTML = '<p style="color: red;">No chart data available.</p>';
-                        console.error('Invalid chart_json:', result.chart_json);
-                    }
+                // Price/Volume chart
+                Plotly.purge('trading-chart');
+                Plotly.newPlot('trading-chart', result.chart_json.data, result.chart_json.layout)
+                    .then(() => console.log('Price/Volume chart rendered'))
+                    .catch(err => console.error('Price/Volume error:', err));
 
-                    // Update PNL chart (separate from price/volume chart)
-                    if (result.pnl_data) {
-                        Plotly.newPlot('pnl-chart', [result.pnl_data], {
-                            title: 'PNL %',
-                            template: 'plotly_dark',
-                            height: 300,
-                            showlegend: true,
-                            xaxis: { title: 'Date' },
-                            yaxis: { title: 'PNL %', showgrid: true }
-                        }).then(() => console.log('PNL chart rendered successfully'))
-                          .catch(error => console.error('Error rendering PNL chart:', error));
-                    } else {
-                        Plotly.purge('pnl-chart');
-                        document.getElementById('pnl-chart').innerHTML = '<p>No PNL data available.</p>';
-                        console.log('No PNL data provided');
-                    }
+                // PNL chart
+                Plotly.purge('pnl-chart');
+                Plotly.newPlot('pnl-chart', [result.pnl_data], {
+                    title: 'PNL %',
+                    template: 'plotly_dark',
+                    height: 300,
+                    showlegend: true,
+                    xaxis: { title: 'Date' },
+                    yaxis: { title: 'PNL %', showgrid: true }
+                }).then(() => console.log('PNL chart rendered'))
+                  .catch(err => console.error('PNL error:', err));
 
-                    // Update trade log table (separate from charts)
-                    if (result.trade_log && result.trade_log.data) {
-                        Plotly.newPlot('trade-log', result.trade_log.data, result.trade_log.layout)
-                            .then(() => console.log('Trade log rendered successfully'))
-                            .catch(error => console.error('Error rendering trade log:', error));
-                    } else {
-                        Plotly.purge('trade-log');
-                        document.getElementById('trade-log').innerHTML = '<p>No trade log available.</p>';
-                        console.log('No trade log provided');
-                    }
+                // Update trade log table
+                const tradeLogBody = document.getElementById('trade-log-body');
+                if (result.trade_log && Array.isArray(result.trade_log)) {
+                    tradeLogBody.innerHTML = result.trade_log.map(trade => `
+                        <tr>
+                            <td>${trade.Date}</td>
+                            <td>${trade.Action}</td>
+                            <td>$${parseFloat(trade.Price).toFixed(2)}</td>
+                            <td>${trade['PNL %'] || 'N/A'}</td>
+                        </tr>
+                    `).join('') || '<tr><td colspan="4" class="text-center">No trades available.</td></tr>';
+                } else {
+                    tradeLogBody.innerHTML = '<tr><td colspan="4" class="text-center">No trades available.</td></tr>';
+                    console.log('No trade log provided or invalid format');
                 }
             } catch (error) {
                 console.error('Error:', error);
@@ -162,9 +181,7 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         });
     }
-
-    // Remove demo balance editability (handled only in Settings)
-    document.getElementById('demo_balance').removeAttribute('name'); // Prevent form submission of demo_balance
+    document.getElementById('demo_balance').removeAttribute('name');
 });
 </script>
 {% endblock %}

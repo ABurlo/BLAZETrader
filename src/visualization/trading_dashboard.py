@@ -2,7 +2,7 @@ import os
 import datetime
 import logging
 import numpy as np
-from quart import Quart, render_template, request, Response, jsonify, session
+from quart import Quart, render_template, request, jsonify, session
 from ib_insync import IB, Stock, util
 import pandas as pd
 import plotly.graph_objects as go
@@ -20,7 +20,7 @@ app = Quart(__name__, static_url_path='/static')
 app.static_folder = os.path.abspath(os.path.join(os.path.dirname(__file__), 'static'))
 
 # Session configuration for demo balance
-app.secret_key = os.urandom(24)  # Secure key for session management
+app.secret_key = os.urandom(24)
 
 # Supported TWS API bar sizes and their maximum duration strings
 SUPPORTED_DURATIONS = {
@@ -44,7 +44,6 @@ SUPPORTED_DURATION_STRINGS = {
     '1 month': '5 Y'
 }
 
-# Define timedelta multipliers for each bar size (in minutes)
 BAR_SIZE_MULTIPLIERS = {
     '1 min': 1,
     '5 mins': 5,
@@ -65,14 +64,13 @@ class MarketDataVisualizer:
             self.end_date = eastern.localize(datetime.datetime.strptime(end_date, "%Y-%m-%d"))
         else:
             self.end_date = eastern.localize(datetime.datetime.now())
-            self.start_date = self.end_date - datetime.timedelta(days=365)  # Default to 1 year lookback
+            self.start_date = self.end_date - datetime.timedelta(days=365)
         self.bar_size = bar_size
         self.ib = None
         self.df = None
         self.backtest_results = None
 
     async def connect_to_ib(self):
-        """Connect to Interactive Brokers using ib_insync."""
         self.ib = IB()
         try:
             await self.ib.connectAsync('127.0.0.1', 7497, clientId=10)
@@ -83,7 +81,6 @@ class MarketDataVisualizer:
             raise ConnectionError(f"Failed to connect to IBKR: {e}")
 
     async def fetch_historical_data(self):
-        """Fetch historical market data from IB TWS."""
         try:
             if self.ib is None or not self.ib.isConnected():
                 await self.connect_to_ib()
@@ -134,6 +131,9 @@ class MarketDataVisualizer:
                 self.df.index = self.df.index.tz_localize('US/Eastern')
             else:
                 self.df.index = self.df.index.tz_convert('US/Eastern')
+            
+            self.df.replace([np.inf, -np.inf], np.nan, inplace=True)
+            self.df.dropna(subset=['close', 'open', 'high', 'low', 'volume'], inplace=True)
             return self.df
             
         except Exception as e:
@@ -145,48 +145,39 @@ class MarketDataVisualizer:
                 self.ib.disconnect()
 
     def generate_ema_signals(self):
-        """Generate signals based on 9/20/200 EMA crossover."""
         if self.df is None or self.df.empty:
             logger.error("No data available for signal generation")
             return
 
-        # Calculate EMAs
         self.df['ema_9'] = self.df['close'].ewm(span=9, adjust=False).mean()
         self.df['ema_20'] = self.df['close'].ewm(span=20, adjust=False).mean()
         self.df['ema_200'] = self.df['close'].ewm(span=200, adjust=False).mean()
 
-        # Generate signals
         self.df['signal'] = 0
-        # Previous EMA values to detect crossovers
         self.df['prev_ema_9'] = self.df['ema_9'].shift(1)
         self.df['prev_ema_20'] = self.df['ema_20'].shift(1)
 
-        # Buy: 9 EMA crosses above 20 EMA and price above 200 EMA
         buy_condition = (self.df['ema_9'] > self.df['ema_20']) & \
                         (self.df['prev_ema_9'] <= self.df['prev_ema_20']) & \
                         (self.df['close'] > self.df['ema_200'])
         self.df.loc[buy_condition, 'signal'] = 1
 
-        # Sell: 9 EMA crosses below 20 EMA and price below 200 EMA
         sell_condition = (self.df['ema_9'] < self.df['ema_20']) & \
                          (self.df['prev_ema_9'] >= self.df['prev_ema_20']) & \
                          (self.df['close'] < self.df['ema_200'])
         self.df.loc[sell_condition, 'signal'] = -1
 
     def calculate_pnl_and_trades(self, demo_balance=10000):
-        """Calculate PNL and trade log based on signals, using a demo balance."""
         if self.df is None or self.df.empty or 'signal' not in self.df.columns:
             logger.error("No data or signals available for PNL calculation")
             return
         
-        # Ensure signals are valid (1 = buy, -1 = sell, 0 = hold)
-        self.df['signal'] = self.df['signal'].fillna(0).astype(int)
-        self.df['position'] = self.df['signal'].shift(1).astype(int)  # Position held on next bar
+        self.df['signal'] = self.df['signal'].fillna(0).astype(float)
+        self.df['position'] = self.df['signal'].shift(1).fillna(0).astype(float)
         
-        # Initialize demo balance tracking as float for consistency
         self.df['balance'] = float(demo_balance)
-        self.df['shares'] = 0
-        self.df['value'] = 0.0  # Ensure float for value
+        self.df['shares'] = 0.0
+        self.df['value'] = 0.0
 
         trades = []
         position = 0
@@ -195,11 +186,15 @@ class MarketDataVisualizer:
 
         for i in range(1, len(self.df)):
             current_signal = self.df['signal'].iloc[i]
-            prev_position = self.df['position'].iloc[i] if not pd.isna(self.df['position'].iloc[i]) else 0
-            current_price = float(self.df['close'].iloc[i])  # Ensure float for price
+            prev_position = self.df['position'].iloc[i]
+            current_price = float(self.df['close'].iloc[i])
+
+            if not np.isfinite(current_price):
+                logger.warning(f"Skipping index {i} due to non-finite price: {current_price}")
+                continue
             
-            if current_signal == 1 and prev_position != 1:  # Enter long
-                if position == -1:  # Close short
+            if current_signal == 1 and prev_position != 1:
+                if position == -1:
                     exit_price = current_price
                     shares_sold = shares
                     pnl = (exit_price - float(self.df['close'].iloc[i-1])) * shares_sold
@@ -208,11 +203,10 @@ class MarketDataVisualizer:
                         'Date': self.df.index[i].strftime('%Y-%m-%d'),
                         'Action': 'Buy (Close Short)',
                         'Price': exit_price,
-                        'PNL %': f"{((pnl / (current_balance - pnl)) * 100):+.2f}"
+                        'PNL %': f"{((pnl / (current_balance - pnl)) * 100):+.2f}" if np.isfinite(pnl) and (current_balance - pnl) != 0 else 'N/A'
                     })
                     shares = 0
-                # Buy with available balance
-                shares_to_buy = int(current_balance // current_price)
+                shares_to_buy = int(current_balance // current_price) if np.isfinite(current_balance / current_price) else 0
                 if shares_to_buy > 0:
                     current_balance -= shares_to_buy * current_price
                     shares = shares_to_buy
@@ -224,8 +218,8 @@ class MarketDataVisualizer:
                         'PNL %': 'N/A'
                     })
             
-            elif current_signal == -1 and prev_position != -1:  # Enter short
-                if position == 1:  # Close long
+            elif current_signal == -1 and prev_position != -1:
+                if position == 1:
                     exit_price = current_price
                     shares_sold = shares
                     pnl = (float(self.df['close'].iloc[i-1]) - exit_price) * shares_sold
@@ -234,11 +228,10 @@ class MarketDataVisualizer:
                         'Date': self.df.index[i].strftime('%Y-%m-%d'),
                         'Action': 'Sell (Close Long)',
                         'Price': exit_price,
-                        'PNL %': f"{((pnl / (current_balance - pnl)) * 100):+.2f}"
+                        'PNL %': f"{((pnl / (current_balance - pnl)) * 100):+.2f}" if np.isfinite(pnl) and (current_balance - pnl) != 0 else 'N/A'
                     })
                     shares = 0
-                # Short (borrow shares, assuming we can short with full balance)
-                shares_to_short = int(current_balance // current_price)
+                shares_to_short = int(current_balance // current_price) if np.isfinite(current_balance / current_price) else 0
                 if shares_to_short > 0:
                     shares = shares_to_short
                     position = -1
@@ -249,55 +242,53 @@ class MarketDataVisualizer:
                         'PNL %': 'N/A'
                     })
             
-            elif current_signal == 0 and prev_position != 0:  # Exit position
+            elif current_signal == 0 and prev_position != 0:
                 exit_price = current_price
-                if position == 1:  # Close long
+                if position == 1:
                     pnl = (exit_price - float(self.df['close'].iloc[i-1])) * shares
                     current_balance += pnl
                     trades.append({
                         'Date': self.df.index[i].strftime('%Y-%m-%d'),
                         'Action': 'Sell',
                         'Price': exit_price,
-                        'PNL %': f"{((pnl / (current_balance - pnl)) * 100):+.2f}"
+                        'PNL %': f"{((pnl / (current_balance - pnl)) * 100):+.2f}" if np.isfinite(pnl) and (current_balance - pnl) != 0 else 'N/A'
                     })
-                elif position == -1:  # Close short
+                elif position == -1:
                     pnl = (float(self.df['close'].iloc[i-1]) - exit_price) * shares
                     current_balance += pnl
                     trades.append({
                         'Date': self.df.index[i].strftime('%Y-%m-%d'),
                         'Action': 'Buy',
                         'Price': exit_price,
-                        'PNL %': f"{((pnl / (current_balance - pnl)) * 100):+.2f}"
+                        'PNL %': f"{((pnl / (current_balance - pnl)) * 100):+.2f}" if np.isfinite(pnl) and (current_balance - pnl) != 0 else 'N/A'
                     })
                 shares = 0
                 position = 0
             
-            # Update balance and shares in DataFrame as floats
-            self.df.loc[self.df.index[i], 'balance'] = float(current_balance)
-            self.df.loc[self.df.index[i], 'shares'] = int(shares)
-            self.df.loc[self.df.index[i], 'value'] = float(shares * current_price) if shares > 0 else 0.0
+            self.df.loc[self.df.index[i], 'balance'] = float(current_balance) if np.isfinite(current_balance) else 0.0
+            self.df.loc[self.df.index[i], 'shares'] = float(shares)
+            self.df.loc[self.df.index[i], 'value'] = float(shares * current_price) if np.isfinite(shares * current_price) else 0.0
 
-        # Calculate metrics
-        total_return = ((current_balance - demo_balance) / demo_balance) * 100
-        daily_returns = self.df['balance'].pct_change().dropna()
+        total_return = ((current_balance - demo_balance) / demo_balance) * 100 if np.isfinite(current_balance) else 0.0
+        daily_returns = self.df['balance'].pct_change().replace([np.inf, -np.inf], np.nan).dropna()
         cumulative_max = self.df['balance'].cummax()
         drawdowns = (cumulative_max - self.df['balance']) / (demo_balance + cumulative_max)
-        max_drawdown = drawdowns.max() * 100
-        sharpe_ratio = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252) if daily_returns.std() != 0 else 0
+        drawdowns.replace([np.inf, -np.inf], np.nan, inplace=True)
+        max_drawdown = drawdowns.max() * 100 if not drawdowns.empty else 0.0
+        sharpe_ratio = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252) if daily_returns.std() != 0 else 0.0
         
-        self.df['pnl_percent'] = self.df['balance'].pct_change() * 100  # Daily PNL % for chart
+        self.df['pnl_percent'] = self.df['balance'].pct_change().replace([np.inf, -np.inf], np.nan) * 100
 
         self.backtest_results = {
-            'pnl_df': self.df[['pnl_percent', 'balance', 'shares', 'value']].copy().astype(float),  # Ensure float for all numeric columns
+            'pnl_df': self.df[['pnl_percent', 'balance', 'shares', 'value']].copy().fillna(0.0),
             'trade_log': trades,
             'total_return': total_return,
-            'max_drawn down': max_drawdown,
+            'max_drawdown': max_drawdown,
             'sharpe_ratio': sharpe_ratio,
             'final_balance': current_balance
         }
 
     async def create_interactive_chart(self, demo_balance=10000):
-        """Create an interactive chart with PNL and trade log for backtesting only."""
         try:
             df = await self.fetch_historical_data()
             if df is None or df.empty:
@@ -309,17 +300,32 @@ class MarketDataVisualizer:
 
             total_days = (self.end_date - self.start_date).days
 
-            # Create candlestick and volume traces
+            # Create Doji candlestick trace with green/red coloring
+            candle_colors = ['green' if row['close'] > row['open'] else 'red' for _, row in df.iterrows()]
             candlestick = go.Candlestick(
                 x=df.index,
                 open=df['open'].astype(float),
                 high=df['high'].astype(float),
                 low=df['low'].astype(float),
                 close=df['close'].astype(float),
+                increasing_line_color='green',  # Green for up days
+                decreasing_line_color='red',    # Red for down days
+                increasing_fillcolor='green',
+                decreasing_fillcolor='red',
+                line_width=1,  # Thin lines for Doji style
                 name='Price'
             )
-            volume_colors = ['green' if (df['close'] > df['open']).iloc[i] else 'red' for i in range(len(df))]
-            volume = go.Bar(x=df.index, y=df['volume'].astype(float), name='Volume', marker_color=volume_colors, opacity=0.6)
+
+            # Create vertical volume bars with green/red coloring
+            volume_colors = ['green' if row['close'] > row['open'] else 'red' for _, row in df.iterrows()]
+            volume = go.Bar(
+                x=df.index,
+                y=df['volume'].astype(float),
+                name='Volume',
+                marker_color=volume_colors,
+                opacity=0.6,
+                showlegend=True
+            )
 
             # Perform backtest
             self.df = df
@@ -328,58 +334,61 @@ class MarketDataVisualizer:
             if not self.backtest_results:
                 return {'error': 'Backtest calculation failed'}
 
-            # Create only the price and volume chart
+            # Create subplots with reduced height for volume
             fig = make_subplots(
                 rows=2, cols=1,
                 shared_xaxes=True,
-                vertical_spacing=0.1,
-                row_heights=[0.7, 0.3],
-                specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
+                vertical_spacing=0.05,  # Reduced spacing for compactness
+                row_heights=[0.75, 0.25],  # 75% for price, 25% for volume (less tall)
+                specs=[[{"secondary_y": False}], [{"secondary_y": False}]]
             )
-            fig.add_trace(candlestick, row=1, col=1, secondary_y=False)
-            fig.add_trace(volume, row=2, col=1, secondary_y=False)
+            fig.add_trace(candlestick, row=1, col=1)
+            fig.add_trace(volume, row=2, col=1)
             fig.update_layout(
                 title=f'{self.ticker} Backtest ({self.bar_size}, {total_days} days)',
                 template='plotly_dark',
-                height=600,  # Reduced height to fit better with layout
+                height=600,
                 width=800,
                 xaxis_rangeslider_visible=False,
                 showlegend=True,
-                yaxis1=dict(title='Price', showgrid=True),
-                yaxis2=dict(title='Volume', showgrid=True),
-                xaxis2=dict(title='Date', showgrid=True)
+                yaxis1=dict(
+                    title='Price ($)',  # Price in dollars
+                    showgrid=True,
+                    gridcolor='rgba(255, 255, 255, 0.1)',  # Light gray grid for dark theme
+                    zerolinecolor='rgba(255, 255, 255, 0.1)',
+                    tickformat='.2f'  # Format price to 2 decimal places
+                ),
+                yaxis2=dict(
+                    title='Volume',
+                    showgrid=True,
+                    gridcolor='rgba(255, 255, 255, 0.1)',  # Light gray grid for dark theme
+                    zerolinecolor='rgba(255, 255, 255, 0.1)'
+                ),
+                xaxis2=dict(
+                    title='Date',  # Time based on user timeframe
+                    showgrid=True,
+                    gridcolor='rgba(255, 255, 255, 0.1)',
+                    type='date'  # Ensure date formatting
+                ),
+                plot_bgcolor='rgba(0, 0, 0, 0)',  # Transparent plot background
+                paper_bgcolor='#2d2d2d',  # Match card background
+                margin=dict(l=50, r=50, t=80, b=50)  # Adjust margins for better fit
             )
 
             # Prepare PNL data for a separate chart
             pnl_data = {
                 'x': self.backtest_results['pnl_df'].index.tolist(),
-                'y': self.backtest_results['pnl_df']['pnl_percent'].tolist(),
+                'y': self.backtest_results['pnl_df']['pnl_percent'].fillna(0.0).tolist(),
                 'type': 'bar',
                 'name': 'PNL %',
-                'marker': {'color': ['green' if x > 0 else 'red' for x in self.backtest_results['pnl_df']['pnl_percent']], 'opacity': 0.8}
-            }
-
-            # Prepare trade log data for a table
-            trade_log = {
-                'data': [{
-                    'type': 'table',
-                    'header': {'values': ['Date', 'Action', 'Price', 'PNL %'], 'fill_color': 'paleturquoise', 'align': 'left'},
-                    'cells': {
-                        'values': [
-                            [t['Date'] for t in self.backtest_results['trade_log']],
-                            [t['Action'] for t in self.backtest_results['trade_log']],
-                            [f"${t['Price']:.2f}" for t in self.backtest_results['trade_log']],
-                            [t['PNL %'] for t in self.backtest_results['trade_log']]
-                        ],
-                        'align': 'left'
-                    }
-                }],
-                'layout': {
-                    'template': 'plotly_dark',
-                    'height': 300,
-                    'width': null
+                'marker': {
+                    'color': ['green' if x > 0 else 'red' for x in self.backtest_results['pnl_df']['pnl_percent'].fillna(0.0)],
+                    'opacity': 0.8
                 }
             }
+
+            # Trade log remains a list of dictionaries
+            trade_log = self.backtest_results['trade_log']
 
             chart_json = pio.to_json(fig)
             return {
@@ -401,19 +410,17 @@ class MarketDataVisualizer:
 # Routes
 @app.route('/')
 async def index():
-    """Render the landing page."""
     return await render_template('home.html')
 
 @app.route('/trading', methods=['GET', 'POST'])
 async def trading():
-    """Render the backtest-only trading page."""
     if request.method == 'POST':
         form = await request.form
         ticker = form.get('ticker', 'AAPL').strip()
         start_date = form.get('start_date', '2024-01-01').strip()
         end_date = form.get('end_date', '2024-12-31').strip()
         bar_size = form.get('bar_size', '1 day').strip()
-        demo_balance = float(session.get('demo_balance', 10000))  # Use session value, non-editable here
+        demo_balance = float(session.get('demo_balance', 10000))
 
         visualizer = MarketDataVisualizer(ticker, start_date=start_date, end_date=end_date, bar_size=bar_size)
         chart_json = await visualizer.create_interactive_chart(demo_balance=demo_balance)
@@ -443,15 +450,14 @@ async def trading():
             final_balance=metrics['final_balance'],
             pnl_data=pnl_data,
             trade_log=trade_log,
-            demo_balance=demo_balance  # Pass as a number for display only
+            demo_balance=demo_balance
         )
     else:
-        # Default GET request for initial page load
         ticker = "AAPL"
         start_date = "2024-01-01"
         end_date = "2024-12-31"
         bar_size = "1 day"
-        demo_balance = float(session.get('demo_balance', 10000))  # Use session value, non-editable
+        demo_balance = float(session.get('demo_balance', 10000))
 
         return await render_template(
             'trading.html',
@@ -467,18 +473,17 @@ async def trading():
             final_balance=demo_balance,
             pnl_data=None,
             trade_log=None,
-            demo_balance=demo_balance  # Pass as a number for display only
+            demo_balance=demo_balance
         )
 
 @app.route('/backtest', methods=['POST'])
 async def run_backtest():
-    """Handle backtest form submission."""
     form = await request.form
     ticker = form.get('ticker', 'AAPL').strip()
     start_date = form.get('start_date', '2024-01-01').strip()
     end_date = form.get('end_date', '2024-12-31').strip()
     bar_size = form.get('bar_size', '1 day').strip()
-    demo_balance = float(session.get('demo_balance', 10000))  # Use session value, non-editable here
+    demo_balance = float(form.get('demo_balance', session.get('demo_balance', 10000)))
 
     visualizer = MarketDataVisualizer(ticker, start_date=start_date, end_date=end_date, bar_size=bar_size)
     chart_json = await visualizer.create_interactive_chart(demo_balance=demo_balance)
@@ -498,7 +503,6 @@ async def run_backtest():
 
 @app.route('/set_demo_balance', methods=['POST'])
 async def set_demo_balance():
-    """Set or update the user's demo balance (only editable in Settings)."""
     form = await request.form
     demo_balance = float(form.get('demo_balance', 10000))
     if demo_balance <= 0:
@@ -508,12 +512,10 @@ async def set_demo_balance():
 
 @app.route('/strategies')
 async def strategies():
-    """Render the strategies page."""
     return await render_template('strategies.html')
 
 @app.route('/portfolio', methods=['GET', 'POST'])
 async def portfolio():
-    """Render and update the portfolio page with live data, reflecting changes from other pages."""
     if 'portfolio' not in session:
         session['portfolio'] = {
             'AAPL': {'shares': 100, 'price': 175.30, 'value': 17530.00, 'change': 1.2},
@@ -540,9 +542,8 @@ async def portfolio():
                     else:
                         session['portfolio'][ticker] = {'shares': shares, 'price': current_price, 'value': cost, 'change': 0}
                     session['demo_balance'] = current_balance - cost
-                    # Update price and change with live data
                     session['portfolio'][ticker]['price'] = current_price
-                    session['portfolio'][ticker]['change'] = np.random.uniform(-2, 2)  # Simulate price change
+                    session['portfolio'][ticker]['change'] = np.random.uniform(-2, 2)
         elif action == 'sell' and ticker and shares > 0:
             if ticker in session['portfolio']:
                 if session['portfolio'][ticker]['shares'] >= shares:
@@ -554,13 +555,12 @@ async def portfolio():
                         session['portfolio'][ticker]['shares'] -= shares
                         session['portfolio'][ticker]['value'] -= revenue
                         session['portfolio'][ticker]['price'] = current_price
-                        session['portfolio'][ticker]['change'] = np.random.uniform(-2, 2)  # Simulate price change
+                        session['portfolio'][ticker]['change'] = np.random.uniform(-2, 2)
                         current_balance = session.get('demo_balance', 10000)
                         session['demo_balance'] = current_balance + revenue
                         if session['portfolio'][ticker]['shares'] == 0:
                             del session['portfolio'][ticker]
 
-        # Calculate portfolio metrics
         total_value = sum(item['value'] for item in session['portfolio'].values())
         total_change = sum(item['change'] for item in session['portfolio'].values()) / len(session['portfolio']) if session['portfolio'] else 0
 
@@ -573,12 +573,11 @@ async def portfolio():
         portfolio=session['portfolio'],
         total_value=f"${total_value:.2f}",
         total_change=f"{total_change:+.2f}%",
-        demo_balance=session.get('demo_balance', 10000)  # Reflects changes from Settings or Trading
+        demo_balance=session.get('demo_balance', 10000)
     )
 
 @app.route('/settings', methods=['GET', 'POST'])
 async def settings():
-    """Render the settings page with demo balance option (editable here), reflecting changes across pages."""
     if request.method == 'POST':
         form = await request.form
         demo_balance = float(form.get('demo_balance', session.get('demo_balance', 10000)))
@@ -592,8 +591,7 @@ async def settings():
 
 @app.route('/logs')
 async def logs():
-    """Render the logs page."""
     return await render_template('logs.html')
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, host='0.0.0.0', port=8000)
