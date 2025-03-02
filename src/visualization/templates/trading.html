@@ -9,7 +9,7 @@
 <div class="card bg-dark border-0 shadow mb-4">
     <div class="card-body">
         <h5 class="card-title text-white"><i class="fas fa-history me-2"></i>Run Backtest</h5>
-        <form id="trading-form">
+        <form id="trading-form" method="post" action="/trading">
             <div class="row">
                 <div class="col-md-2 mb-3">
                     <label for="ticker" class="form-label text-white">Ticker</label>
@@ -46,8 +46,9 @@
             <!-- Display Demo Balance (non-editable) -->
             <div class="row">
                 <div class="col-md-3 mb-3">
-                    <label for="demo_balance" class="form-label text-white">Demo Balance ($)</label>
-                    <input type="text" class="form-control bg-dark text-light border-secondary" id="demo_balance" value="{{ demo_balance|float|round(2) }}" readonly>
+                    <label for="demo_balance_display" class="form-label text-white">Demo Balance ($)</label>
+                    <input type="text" class="form-control bg-dark text-light border-secondary" id="demo_balance_display" value="{{ demo_balance|float|round(2) }}" readonly>
+                    <input type="hidden" id="demo_balance" name="demo_balance" value="{{ demo_balance|float|round(2) }}">
                 </div>
             </div>
         </form>
@@ -60,7 +61,9 @@
         <div class="card bg-dark border-0 shadow">
             <div class="card-body">
                 <h5 class="card-title text-white"><i class="fas fa-chart-pie me-2"></i>Price and Volume</h5>
-                <div id="trading-chart" style="height: 600px;"></div>
+                <div id="trading-chart" style="height: 600px;">
+                    {{ chart_html | safe }}
+                </div>
             </div>
         </div>
     </div>
@@ -68,16 +71,16 @@
         <div class="card bg-dark border-0 shadow">
             <div class="card-body">
                 <h5 class="card-title text-white"><i class="fas fa-chart-bar me-2"></i>Backtest Metrics</h5>
-                <p class="text-white"><strong>Total Return:</strong> <span id="total-return">0.00%</span></p>
-                <p class="text-white"><strong>Max Drawdown:</strong> <span id="max-drawdown">0.00%</span></p>
-                <p class="text-white"><strong>Sharpe Ratio:</strong> <span id="sharpe-ratio">0.00</span></p>
-                <p class="text-white"><strong>Final Balance:</strong> <span id="final-balance">$10000.00</span></p>
+                <p class="text-white"><strong>Total Return:</strong> <span id="total-return">{{ total_return }}%</span></p>
+                <p class="text-white"><strong>Max Drawdown:</strong> <span id="max-drawdown">{{ max_drawdown }}%</span></p>
+                <p class="text-white"><strong>Sharpe Ratio:</strong> <span id="sharpe-ratio">{{ sharpe_ratio }}</span></p>
+                <p class="text-white"><strong>Final Balance:</strong> <span id="final-balance">${{ final_balance|float|round(2) }}</span></p>
                 
                 <h5 class="mt-4 text-white"><i class="fas fa-bar-chart me-2"></i>PNL</h5>
                 <div id="pnl-chart" style="height: 300px;"></div>
 
                 <h5 class="mt-4 text-white"><i class="fas fa-table me-2"></i>Trade Log</h5>
-                <div id="trade-log" style="height: 300px; overflow-y: auto;">
+                <div id="trade-log" style="max-height: 300px; overflow-y: auto;">
                     <table class="table table-dark table-hover" id="trade-log-table">
                         <thead>
                             <tr>
@@ -112,18 +115,33 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', function () {
+    // Initial PNL chart render if data is available
+    let pnlData = {{ pnl_data | tojson | default('null') | safe }};
+    if (pnlData && typeof pnlData === 'object' && pnlData.x && pnlData.y) {
+        Plotly.newPlot('pnl-chart', [pnlData], {
+            title: 'PNL %',
+            template: 'plotly_dark',
+            height: 300,
+            showlegend: true,
+            xaxis: { title: 'Date', type: 'date', tickformat: '%b %Y' },
+            yaxis: { title: 'PNL %', showgrid: true }
+        }).then(() => console.log('Initial PNL chart rendered'))
+          .catch(err => console.error('Initial PNL error:', err));
+    } else {
+        console.log('No PNL data available for initial render');
+    }
+
     const tradingForm = document.getElementById('trading-form');
     if (tradingForm) {
         tradingForm.addEventListener('submit', async function (e) {
             e.preventDefault();
             const formData = new FormData(tradingForm);
-            const demo_balance = parseFloat(document.getElementById('demo_balance').value) || 10000;
-            formData.append('demo_balance', demo_balance);
 
             try {
                 const chartContainer = document.getElementById('trading-chart');
-                chartContainer.innerHTML = '<p>Loading chart...</p>';
+                chartContainer.innerHTML = '<p class="text-white">Loading chart...</p>';
 
+                // Fetch from /backtest for dynamic update
                 const response = await fetch('/backtest', {
                     method: 'POST',
                     body: formData
@@ -141,23 +159,30 @@ document.addEventListener('DOMContentLoaded', function () {
                 document.getElementById('sharpe-ratio').textContent = result.sharpe_ratio.toFixed(2);
                 document.getElementById('final-balance').textContent = `$${result.final_balance.toFixed(2)}`;
 
-                // Price/Volume chart
+                // Update price/volume chart
                 Plotly.purge('trading-chart');
                 Plotly.newPlot('trading-chart', result.chart_json.data, result.chart_json.layout)
                     .then(() => console.log('Price/Volume chart rendered'))
                     .catch(err => console.error('Price/Volume error:', err));
 
-                // PNL chart
+                // Update PNL chart
                 Plotly.purge('pnl-chart');
-                Plotly.newPlot('pnl-chart', [result.pnl_data], {
-                    title: 'PNL %',
-                    template: 'plotly_dark',
-                    height: 300,
-                    showlegend: true,
-                    xaxis: { title: 'Date' },
-                    yaxis: { title: 'PNL %', showgrid: true }
-                }).then(() => console.log('PNL chart rendered'))
-                  .catch(err => console.error('PNL error:', err));
+                pnlData = result.pnl_data;
+                if (pnlData && typeof pnlData === 'object' && pnlData.x && pnlData.y) {
+                    Plotly.newPlot('pnl-chart', [pnlData], {
+                        title: 'PNL %',
+                        template: 'plotly_dark',
+                        height: 300,
+                        showlegend: true,
+                        xaxis: { title: 'Date', type: 'date', tickformat: '%b %Y' },
+                        yaxis: { title: 'PNL %', showgrid: true }
+                    }).then(() => console.log('PNL chart rendered'))
+                      .catch(err => console.error('PNL error:', err));
+                } else {
+                    console.log('No PNL data available after backtest');
+                    Plotly.purge('pnl-chart');
+                    document.getElementById('pnl-chart').innerHTML = '<p class="text-white">No PNL data available.</p>';
+                }
 
                 // Update trade log table
                 const tradeLogBody = document.getElementById('trade-log-body');
@@ -172,16 +197,14 @@ document.addEventListener('DOMContentLoaded', function () {
                     `).join('') || '<tr><td colspan="4" class="text-center">No trades available.</td></tr>';
                 } else {
                     tradeLogBody.innerHTML = '<tr><td colspan="4" class="text-center">No trades available.</td></tr>';
-                    console.log('No trade log provided or invalid format');
                 }
             } catch (error) {
                 console.error('Error:', error);
                 chartContainer.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
-                alert('Failed to run backtest');
+                alert('Failed to run backtest: ' + error.message);
             }
         });
     }
-    document.getElementById('demo_balance').removeAttribute('name');
 });
 </script>
 {% endblock %}

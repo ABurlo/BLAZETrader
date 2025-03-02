@@ -9,14 +9,14 @@
 <div class="card bg-dark border-0 shadow mb-4">
     <div class="card-body">
         <h5 class="card-title text-white"><i class="fas fa-wallet me-2"></i>Portfolio Summary</h5>
-        <p class="text-white"><strong>Total Value:</strong> {{ total_value }}</p>
-        <p class="text-white"><strong>Total Change:</strong> {{ total_change }}</p>
-        <p class="text-white"><strong>Demo Balance:</strong> {{ demo_balance }}</p>
+        <p class="text-white"><strong>Total Value:</strong> ${{ total_value|float|round(2) }}</p>
+        <p class="text-white"><strong>Total Change:</strong> {% if total_change is number %}{{ "{:+.2f}%".format(total_change) }}{% else %}{{ total_change }}{% endif %}</p>
+        <p class="text-white"><strong>Demo Balance:</strong> ${{ demo_balance|float|round(2) }}</p>
     </div>
 </div>
 
-<!-- Portfolio Table -->
-<div class="card bg-dark border-0 shadow">
+<!-- Portfolio Table (Ensure this is the only .card-body for holdings) -->
+<div class="card bg-dark border-0 shadow mb-4" id="portfolio-card">
     <div class="card-body">
         <h5 class="card-title text-white"><i class="fas fa-list me-2"></i>Holdings</h5>
         <table class="table table-dark table-striped">
@@ -31,74 +31,217 @@
                 </tr>
             </thead>
             <tbody>
-                {% for ticker, data in portfolio.items() %}
-                <tr>
-                    <td class="text-white">{{ ticker }}</td>
-                    <td class="text-white">{{ data.shares }}</td>
-                    <td class="text-white">${{ data.price|float }}</td>
-                    <td class="text-white">${{ data.value|float }}</td>
-                    <td class="text-white" style="color: {% if data.change >= 0 %}green{% else %}red{% endif %};">{{ "{:+.2f}%".format(data.change) }}</td>
-                    <td class="text-white">
-                        <form method="post" class="d-inline">
-                            <input type="hidden" name="ticker" value="{{ ticker }}">
-                            <input type="number" name="shares" class="form-control form-control-sm d-inline" style="width: 80px;" min="1" required>
-                            <button type="submit" name="action" value="buy" class="btn btn-success btn-sm me-1">Buy</button>
-                            <button type="submit" name="action" value="sell" class="btn btn-danger btn-sm">Sell</button>
-                        </form>
-                    </td>
-                </tr>
-                {% endfor %}
+                {% if portfolio %}
+                    {% for ticker, data in portfolio.items() %}
+                        <tr>
+                            <td class="text-white">{{ ticker }}</td>
+                            <td class="text-white">{{ data.shares|int }}</td>
+                            <td class="text-white">${{ data.price|float|round(2) }}</td>
+                            <td class="text-white">${{ data.value|float|round(2) }}</td>
+                            <td class="text-white" style="color: {{ 'green' if data.change >= 0 else 'red' }};">
+                                {{ "{:+.2f}%".format(data.change) }}
+                            </td>
+                            <td class="text-white">
+                                <form method="post" class="d-inline needs-validation" novalidate data-ticker="{{ ticker }}">
+                                    <input type="hidden" name="ticker" value="{{ ticker }}">
+                                    <input type="number" name="shares" class="form-control form-control-sm d-inline" style="width: 80px;" min="1" required>
+                                    <div class="invalid-feedback">Please enter a positive number of shares.</div>
+                                    <button type="submit" name="action" value="buy" class="btn btn-success btn-sm me-1">Buy</button>
+                                    <button type="submit" name="action" value="sell" class="btn btn-danger btn-sm">Sell</button>
+                                </form>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                {% else %}
+                    <tr>
+                        <td colspan="6" class="text-center text-white">No holdings available.</td>
+                    </tr>
+                {% endif %}
             </tbody>
         </table>
+        <p class="text-white"><strong>Total Value:</strong> ${{ total_value|float|round(2) }}</p>
+        <p class="text-white"><strong>Total Change:</strong> {% if total_change is number %}{{ "{:+.2f}%".format(total_change) }}{% else %}{{ total_change }}{% endif %}</p>
+        <p class="text-white"><strong>Demo Balance:</strong> ${{ demo_balance|float|round(2) }}</p>
+    </div>
+</div>
+
+<!-- Force Add Holdings Form -->
+<div class="card bg-dark border-0 shadow mb-4">
+    <div class="card-body">
+        <h5 class="card-title text-white"><i class="fas fa-plus me-2"></i>Force Add Holding</h5>
+        <form id="force-add-form" class="needs-validation" novalidate>
+            <div class="row g-3">
+                <div class="col-md-3">
+                    <label for="force-ticker" class="form-label text-white">Ticker</label>
+                    <input type="text" class="form-control bg-dark text-light border-secondary" id="force-ticker" name="ticker" required>
+                    <div class="invalid-feedback">Please enter a ticker symbol.</div>
+                </div>
+                <div class="col-md-3">
+                    <label for="force-shares" class="form-label text-white">Shares</label>
+                    <input type="number" class="form-control bg-dark text-light border-secondary" id="force-shares" name="shares" min="1" required>
+                    <div class="invalid-feedback">Please enter a positive number of shares.</div>
+                </div>
+                <div class="col-md-3">
+                    <label for="force-current-price" class="form-label text-white">Current Price ($)</label>
+                    <input type="number" class="form-control bg-dark text-light border-secondary" id="force-current-price" name="current_price" step="0.01" min="0.01" required>
+                    <div class="invalid-feedback">Please enter a positive current price.</div>
+                </div>
+                <div class="col-md-3">
+                    <label for="force-cost-basis" class="form-label text-white">Cost Basis ($)</label>
+                    <input type="number" class="form-control bg-dark text-light border-secondary" id="force-cost-basis" name="cost_basis" step="0.01" min="0.01" required>
+                    <div class="invalid-feedback">Please enter a positive cost basis.</div>
+                </div>
+                <div class="col-12">
+                    <button type="submit" class="btn btn-primary mt-3">Add Holding</button>
+                </div>
+            </div>
+        </form>
     </div>
 </div>
 
 <script>
+    // Form validation and AJAX submission for buy/sell/force-add
+    (function () {
+        'use strict'
+        var forms = document.querySelectorAll('.needs-validation')
+        Array.prototype.slice.call(forms).forEach(function (form) {
+            form.addEventListener('submit', async function (event) {
+                event.preventDefault()
+                if (!form.checkValidity()) {
+                    event.stopPropagation()
+                    form.classList.add('was-validated')
+                    return
+                }
+
+                const formData = new FormData(form)
+                let action = formData.get('action')
+                
+                // Ensure action is set for force-add form
+                if (!action && form.id === 'force-add-form') {
+                    action = 'force-add'
+                    formData.append('action', action)
+                } else if (!action) {
+                    action = form.querySelector('button[type="submit"][name="action"]:checked')?.value || 'buy'
+                    formData.append('action', action)
+                }
+
+                console.log('Submitting form with action:', action, 'FormData:', Object.fromEntries(formData))
+
+                try {
+                    const response = await fetch('/portfolio', {
+                        method: 'POST',
+                        body: formData
+                    })
+                    const data = await response.json()
+
+                    if (!response.ok) {
+                        alert(`Error: ${data.error || 'Failed to process request'}`)
+                        console.error('Server error:', data)
+                        return
+                    }
+
+                    alert('Action completed successfully!')
+                    // Update the first .card-body (original holdings table) only
+                    const cardBody = document.querySelector('#portfolio-card .card-body')
+                    if (cardBody) {
+                        cardBody.innerHTML = `
+                            <h5 class="card-title text-white"><i class="fas fa-list me-2"></i>Holdings</h5>
+                            <table class="table table-dark table-striped">
+                                <thead><tr>
+                                    <th class="text-white">Ticker</th>
+                                    <th class="text-white">Shares</th>
+                                    <th class="text-white">Price</th>
+                                    <th class="text-white">Value</th>
+                                    <th class="text-white">Change</th>
+                                    <th class="text-white">Actions</th>
+                                </tr></thead>
+                                <tbody>
+                                    ${Object.entries(data.portfolio || {}).map(([ticker, data]) => `
+                                        <tr>
+                                            <td class="text-white">${ticker}</td>
+                                            <td class="text-white">${data.shares}</td>
+                                            <td class="text-white">$${parseFloat(data.price).toFixed(2)}</td>
+                                            <td class="text-white">$${parseFloat(data.value).toFixed(2)}</td>
+                                            <td class="text-white" style="color: ${data.change >= 0 ? 'green' : 'red'};">${data.change.toFixed(2)}%</td>
+                                            <td class="text-white">
+                                                <form method="post" class="d-inline needs-validation" novalidate data-ticker="${ticker}">
+                                                    <input type="hidden" name="ticker" value="${ticker}">
+                                                    <input type="number" name="shares" class="form-control form-control-sm d-inline" style="width: 80px;" min="1" required>
+                                                    <div class="invalid-feedback">Please enter a positive number of shares.</div>
+                                                    <button type="submit" name="action" value="buy" class="btn btn-success btn-sm me-1">Buy</button>
+                                                    <button type="submit" name="action" value="sell" class="btn btn-danger btn-sm">Sell</button>
+                                                </form>
+                                            </td>
+                                        </tr>
+                                    `).join('') || '<tr><td colspan="6" class="text-center text-white">No holdings available.</td></tr>'}
+                                </tbody>
+                            </table>
+                            <p class="text-white"><strong>Total Value:</strong> $${parseFloat(data.total_value).toFixed(2)}</p>
+                            <p class="text-white"><strong>Total Change:</strong> ${typeof data.total_change === 'number' ? data.total_change.toFixed(2) + '%' : data.total_change}</p>
+                            <p class="text-white"><strong>Demo Balance:</strong> $${parseFloat(data.demo_balance).toFixed(2)}</p>
+                        `
+                    } else {
+                        console.error('Card body element not found')
+                    }
+                } catch (error) {
+                    console.error('Error processing action:', error)
+                    alert('An error occurred while processing the action. Check the console for details.')
+                }
+            }, false)
+        })
+    })()
+
     // Periodically update portfolio (e.g., every 30 seconds) to simulate live data
     setInterval(async () => {
         try {
-            const response = await fetch('/portfolio', { method: 'GET' });
-            const data = await response.json();
+            const response = await fetch('/portfolio', { method: 'GET' })
+            const data = await response.json()
             if (response.ok) {
-                document.querySelector('.card-body').innerHTML = `
-                    <h5 class="card-title text-white"><i class="fas fa-list me-2"></i>Holdings</h5>
-                    <table class="table table-dark table-striped">
-                        <thead><tr>
-                            <th class="text-white">Ticker</th>
-                            <th class="text-white">Shares</th>
-                            <th class="text-white">Price</th>
-                            <th class="text-white">Value</th>
-                            <th class="text-white">Change</th>
-                            <th class="text-white">Actions</th>
-                        </tr></thead>
-                        <tbody>
-                            ${Object.entries(data.portfolio).map(([ticker, data]) => `
-                                <tr>
-                                    <td class="text-white">${ticker}</td>
-                                    <td class="text-white">${data.shares}</td>
-                                    <td class="text-white">$${data.price}</td>
-                                    <td class="text-white">$${data.value}</td>
-                                    <td class="text-white" style="color: ${data.change >= 0 ? 'green' : 'red'};">${data.change.toFixed(2)}%</td>
-                                    <td class="text-white">
-                                        <form method="post" class="d-inline">
-                                            <input type="hidden" name="ticker" value="${ticker}">
-                                            <input type="number" name="shares" class="form-control form-control-sm d-inline" style="width: 80px;" min="1" required>
-                                            <button type="submit" name="action" value="buy" class="btn btn-success btn-sm me-1">Buy</button>
-                                            <button type="submit" name="action" value="sell" class="btn btn-danger btn-sm">Sell</button>
-                                        </form>
-                                    </td>
-                                </tr>
-                            `).join('')}
-                        </tbody>
-                    </table>
-                    <p class="text-white"><strong>Total Value:</strong> $${data.total_value}</p>
-                    <p class="text-white"><strong>Total Change:</strong> ${data.total_change}%</p>
-                    <p class="text-white"><strong>Demo Balance:</strong> $${data.demo_balance}</p>
-                `;
+                const cardBody = document.querySelector('#portfolio-card .card-body')
+                if (cardBody) {
+                    cardBody.innerHTML = `
+                        <h5 class="card-title text-white"><i class="fas fa-list me-2"></i>Holdings</h5>
+                        <table class="table table-dark table-striped">
+                            <thead><tr>
+                                <th class="text-white">Ticker</th>
+                                <th class="text-white">Shares</th>
+                                <th class="text-white">Price</th>
+                                <th class="text-white">Value</th>
+                                <th class="text-white">Change</th>
+                                <th class="text-white">Actions</th>
+                            </tr></thead>
+                            <tbody>
+                                ${Object.entries(data.portfolio || {}).map(([ticker, data]) => `
+                                    <tr>
+                                        <td class="text-white">${ticker}</td>
+                                        <td class="text-white">${data.shares}</td>
+                                        <td class="text-white">$${parseFloat(data.price).toFixed(2)}</td>
+                                        <td class="text-white">$${parseFloat(data.value).toFixed(2)}</td>
+                                        <td class="text-white" style="color: ${data.change >= 0 ? 'green' : 'red'};">${data.change.toFixed(2)}%</td>
+                                        <td class="text-white">
+                                            <form method="post" class="d-inline needs-validation" novalidate data-ticker="${ticker}">
+                                                <input type="hidden" name="ticker" value="${ticker}">
+                                                <input type="number" name="shares" class="form-control form-control-sm d-inline" style="width: 80px;" min="1" required>
+                                                <div class="invalid-feedback">Please enter a positive number of shares.</div>
+                                                <button type="submit" name="action" value="buy" class="btn btn-success btn-sm me-1">Buy</button>
+                                                <button type="submit" name="action" value="sell" class="btn btn-danger btn-sm">Sell</button>
+                                            </form>
+                                        </td>
+                                    </tr>
+                                `).join('') || '<tr><td colspan="6" class="text-center text-white">No holdings available.</td></tr>'}
+                            </tbody>
+                        </table>
+                        <p class="text-white"><strong>Total Value:</strong> $${parseFloat(data.total_value).toFixed(2)}</p>
+                        <p class="text-white"><strong>Total Change:</strong> ${typeof data.total_change === 'number' ? data.total_change.toFixed(2) + '%' : data.total_change}</p>
+                        <p class="text-white"><strong>Demo Balance:</strong> $${parseFloat(data.demo_balance).toFixed(2)}</p>
+                    `
+                } else {
+                    console.error('Card body element not found during periodic update')
+                }
             }
         } catch (error) {
-            console.error('Error updating portfolio:', error);
+            console.error('Error updating portfolio:', error)
         }
-    }, 30000); // Update every 30 seconds
+    }, 30000) // Update every 30 seconds
 </script>
 {% endblock %}
