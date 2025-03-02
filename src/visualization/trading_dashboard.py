@@ -143,6 +143,35 @@ class MarketDataVisualizer:
                 logger.info("Disconnecting from IBKR")
                 self.ib.disconnect()
 
+    def generate_ema_signals(self):
+        """Generate signals based on 9/20/200 EMA crossover."""
+        if self.df is None or self.df.empty:
+            logger.error("No data available for signal generation")
+            return
+
+        # Calculate EMAs
+        self.df['ema_9'] = self.df['close'].ewm(span=9, adjust=False).mean()
+        self.df['ema_20'] = self.df['close'].ewm(span=20, adjust=False).mean()
+        self.df['ema_200'] = self.df['close'].ewm(span=200, adjust=False).mean()
+
+        # Generate signals
+        self.df['signal'] = 0
+        # Previous EMA values to detect crossovers
+        self.df['prev_ema_9'] = self.df['ema_9'].shift(1)
+        self.df['prev_ema_20'] = self.df['ema_20'].shift(1)
+
+        # Buy: 9 EMA crosses above 20 EMA and price above 200 EMA
+        buy_condition = (self.df['ema_9'] > self.df['ema_20']) & \
+                        (self.df['prev_ema_9'] <= self.df['prev_ema_20']) & \
+                        (self.df['close'] > self.df['ema_200'])
+        self.df.loc[buy_condition, 'signal'] = 1
+
+        # Sell: 9 EMA crosses below 20 EMA and price below 200 EMA
+        sell_condition = (self.df['ema_9'] < self.df['ema_20']) & \
+                         (self.df['prev_ema_9'] >= self.df['prev_ema_20']) & \
+                         (self.df['close'] < self.df['ema_200'])
+        self.df.loc[sell_condition, 'signal'] = -1
+
     def calculate_pnl_and_trades(self):
         """Universal PNL and trade log calculation based on signals."""
         if self.df is None or self.df.empty or 'signal' not in self.df.columns:
@@ -264,69 +293,89 @@ class MarketDataVisualizer:
             volume = go.Bar(x=df.index, y=df['volume'], name='Volume', marker_color=volume_colors, opacity=0.6)
 
             if is_backtest:
-                if 'signal' not in df.columns:
-                    return {'error': 'No strategy signals provided for backtest'}
                 self.df = df
+                self.generate_ema_signals()  # Generate EMA-based signals
                 self.calculate_pnl_and_trades()
                 if not self.backtest_results:
                     return {'error': 'Backtest calculation failed'}
 
-                pnl_trace = go.Bar(
-                    x=self.backtest_results['pnl_df'].index,
-                    y=self.backtest_results['pnl_df']['pnl_percent'],
-                    name='PNL %',
-                    marker_color=['green' if x > 0 else 'red' for x in self.backtest_results['pnl_df']['pnl_percent']]
-                )
-                trade_table = go.Table(
-                    header=dict(values=['Date', 'Action', 'Price', 'PNL %'], fill_color='paleturquoise'),
-                    cells=dict(values=[
-                        [t['Date'] for t in self.backtest_results['trade_log']],
-                        [t['Action'] for t in self.backtest_results['trade_log']],
-                        [f"{t['Price']:.2f}" for t in self.backtest_results['trade_log']],
-                        [t['PNL %'] for t in self.backtest_results['trade_log']]
-                    ])
-                )
-
+                # Create only the price and volume chart
                 fig = make_subplots(
-                    rows=2, cols=2,
-                    specs=[[{"rowspan": 2}, {"type": "bar"}], [{"type": "table"}, None]],
-                    column_widths=[0.7, 0.3],
+                    rows=2, cols=1,
+                    shared_xaxes=True,
+                    vertical_spacing=0.1,
                     row_heights=[0.7, 0.3],
-                    vertical_spacing=0.05,
-                    horizontal_spacing=0.05,
-                    shared_xaxes=True
+                    specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
                 )
-                fig.add_trace(candlestick, row=1, col=1)
-                fig.add_trace(volume, row=1, col=1, secondary_y=True)
-                fig.add_trace(pnl_trace, row=1, col=2)
-                fig.add_trace(trade_table, row=2, col=1)
+                fig.add_trace(candlestick, row=1, col=1, secondary_y=False)
+                fig.add_trace(volume, row=2, col=1, secondary_y=False)
                 fig.update_layout(
                     title=f'{self.ticker} Backtest ({self.bar_size}, {total_days} days)',
-                    template='plotly_white',
+                    template='plotly_dark',  # Matches your dark theme
                     height=800,
-                    showlegend=True,
-                    yaxis_title='Price',
-                    yaxis2_title='Volume',
-                    yaxis3_title='PNL %',
-                    xaxis2_title='Date'
-                )
-            else:
-                fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.7, 0.3])
-                fig.add_trace(candlestick, row=1, col=1)
-                fig.add_trace(volume, row=2, col=1)
-                fig.update_layout(
-                    title=f'{self.ticker} Price and Volume ({self.bar_size}, {total_days} days)',
-                    template='plotly_white',
-                    height=800,
+                    width=800,  # Narrower width to leave space for PNL and trade log on the right
                     xaxis_rangeslider_visible=False,
                     showlegend=True,
-                    yaxis1=dict(title='Price'),
-                    yaxis2=dict(title='Volume'),
-                    xaxis2=dict(title='Date')
+                    yaxis1=dict(title='Price', showgrid=True),
+                    yaxis2=dict(title='Volume', showgrid=True),
+                    xaxis2=dict(title='Date', showgrid=True)
                 )
 
-            chart_json = pio.to_json(fig)
-            return json.loads(chart_json)
+                # Prepare PNL data for a separate chart
+                pnl_data = {
+                    'x': self.backtest_results['pnl_df'].index.tolist(),
+                    'y': self.backtest_results['pnl_df']['pnl_percent'].tolist(),
+                    'type': 'bar',
+                    'name': 'PNL %',
+                    'marker': {'color': ['green' if x > 0 else 'red' for x in self.backtest_results['pnl_df']['pnl_percent']], 'opacity': 0.8}
+                }
+
+                # Prepare trade log data for a table
+                trade_log = {
+                    'header': {'values': ['Date', 'Action', 'Price', 'PNL %'], 'fill_color': 'paleturquoise', 'align': 'left'},
+                    'cells': {
+                        'values': [
+                            [t['Date'] for t in self.backtest_results['trade_log']],
+                            [t['Action'] for t in self.backtest_results['trade_log']],
+                            [f"{t['Price']:.2f}" for t in self.backtest_results['trade_log']],
+                            [t['PNL %'] for t in self.backtest_results['trade_log']]
+                        ],
+                        'align': 'left'
+                    }
+                }
+
+                chart_json = pio.to_json(fig)
+                return {
+                    'chart_json': json.loads(chart_json),
+                    'pnl_data': pnl_data,
+                    'trade_log': trade_log
+                }
+
+            else:
+                # Non-backtest chart (price and volume only)
+                fig = make_subplots(
+                    rows=2, cols=1,
+                    shared_xaxes=True,
+                    vertical_spacing=0.1,
+                    row_heights=[0.7, 0.3],
+                    specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
+                )
+                fig.add_trace(candlestick, row=1, col=1, secondary_y=False)
+                fig.add_trace(volume, row=2, col=1, secondary_y=False)
+                fig.update_layout(
+                    title=f'{self.ticker} Price and Volume ({self.bar_size}, {total_days} days)',
+                    template='plotly_dark',
+                    height=800,
+                    width=800,
+                    xaxis_rangeslider_visible=False,
+                    showlegend=True,
+                    yaxis1=dict(title='Price', showgrid=True),
+                    yaxis2=dict(title='Volume', showgrid=True),
+                    xaxis2=dict(title='Date', showgrid=True)
+                )
+
+                chart_json = pio.to_json(fig)
+                return {'chart_json': json.loads(chart_json)}
 
         except Exception as e:
             return {'error': f"Error generating chart: {str(e)}"}
@@ -346,7 +395,12 @@ async def dashboard():
     bar_size = "1 day"
     visualizer = MarketDataVisualizer(ticker, start_date=start_date, end_date=end_date, bar_size=bar_size)
     chart_json = await visualizer.create_interactive_chart()
-    chart_html = go.Figure(chart_json).to_html(full_html=False, include_plotlyjs='cdn', div_id="chart-1") if 'error' not in chart_json else f"<div style='color: red; text-align: center;'>{chart_json['error']}</div>"
+    if 'error' in chart_json:
+        chart_html = f"<div style='color: red; text-align: center;'>{chart_json['error']}</div>"
+    else:
+        # Create a Plotly figure from the chart_json['data'] and chart_json['layout']
+        fig = go.Figure(data=chart_json['chart_json']['data'], layout=chart_json['chart_json']['layout'])
+        chart_html = fig.to_html(full_html=False, include_plotlyjs='cdn', div_id="chart-1")
     return await render_template(
         'dashboard.html',
         chart_html=chart_html,
@@ -376,21 +430,23 @@ async def backtest():
     end_date = "2024-12-31"
     bar_size = "1 day"
     visualizer = MarketDataVisualizer(ticker, start_date=start_date, end_date=end_date, bar_size=bar_size)
-    # Simulate signals for initial load (replace with actual strategy in production)
-    df = await visualizer.fetch_historical_data()
-    df['signal'] = np.random.choice([1, -1, 0], size=len(df))  # Placeholder; replace with strategy logic
-    visualizer.df = df
     chart_json = await visualizer.create_interactive_chart(is_backtest=True)
     if 'error' in chart_json:
         chart_html = f"<div style='color: red;'>{chart_json['error']}</div>"
         metrics = {'total_return': 0, 'max_drawdown': 0, 'sharpe_ratio': 0}
+        pnl_data = None
+        trade_log = None
     else:
-        chart_html = go.Figure(chart_json).to_html(full_html=False, include_plotlyjs='cdn', div_id="backtest-chart")
+        # Create a Plotly figure from the chart_json['chart_json']['data'] and chart_json['chart_json']['layout']
+        fig = go.Figure(data=chart_json['chart_json']['data'], layout=chart_json['chart_json']['layout'])
+        chart_html = fig.to_html(full_html=False, include_plotlyjs='cdn', div_id="backtest-chart")
         metrics = {
             'total_return': visualizer.backtest_results['total_return'],
             'max_drawdown': visualizer.backtest_results['max_drawdown'],
             'sharpe_ratio': visualizer.backtest_results['sharpe_ratio']
         }
+        pnl_data = chart_json.get('pnl_data')
+        trade_log = chart_json.get('trade_log')
     return await render_template(
         'backtest.html',
         chart_html=chart_html,
@@ -402,7 +458,9 @@ async def backtest():
         selected_bar_size=bar_size,
         total_return=f"{metrics['total_return']:+.2f}",
         max_drawdown=f"-{metrics['max_drawdown']:.2f}",
-        sharpe_ratio=f"{metrics['sharpe_ratio']:.2f}"
+        sharpe_ratio=f"{metrics['sharpe_ratio']:.2f}",
+        pnl_data=pnl_data,
+        trade_log=trade_log
     )
 
 @app.route('/settings')
@@ -444,7 +502,7 @@ async def generate_chart():
             visualizer = MarketDataVisualizer(ticker, start_date=start_date, end_date=end_date, bar_size=bar_size)
 
         if bar_size not in SUPPORTED_DURATIONS:
-            return jsonify({'error': f"Invalid bar size: {bar_size}"}, SUPPORTED_DURATIONS), 400
+            return jsonify({'error': f"Invalid bar_size: {bar_size}"}), 400
 
         chart_json = await visualizer.create_interactive_chart()
         if 'error' in chart_json:
@@ -466,13 +524,9 @@ async def run_backtest():
     start_date = form['start_date'].strip()
     end_date = form['end_date'].strip()
     bar_size = form.get('bar_size', '1 day').strip()
-    strategy = form.get('strategy', '').strip()
+    # Strategy parameter ignored since we're hardcoding EMA crossover for now
 
     visualizer = MarketDataVisualizer(ticker, start_date=start_date, end_date=end_date, bar_size=bar_size)
-    df = await visualizer.fetch_historical_data()
-    # Placeholder: Replace with actual strategy logic based on 'strategy'
-    df['signal'] = np.random.choice([1, -1, 0], size=len(df))  # Simulated signals
-    visualizer.df = df
     chart_json = await visualizer.create_interactive_chart(is_backtest=True)
     if 'error' in chart_json:
         return jsonify({'error': chart_json['error']}), 400
@@ -481,7 +535,9 @@ async def run_backtest():
         'total_return': visualizer.backtest_results['total_return'],
         'max_drawdown': visualizer.backtest_results['max_drawdown'],
         'sharpe_ratio': visualizer.backtest_results['sharpe_ratio'],
-        'chart_json': chart_json
+        'chart_json': chart_json['chart_json'],  # Extract just the chart data
+        'pnl_data': chart_json.get('pnl_data'),
+        'trade_log': chart_json.get('trade_log')
     }
     return jsonify(metrics)
 

@@ -18,9 +18,7 @@
                 <div class="col-md-3 mb-3">
                     <label for="strategy" class="form-label">Strategy</label>
                     <select class="form-control bg-dark text-light border-secondary" id="strategy" name="strategy">
-                        <option value="Moving Average Crossover">Moving Average Crossover</option>
-                        <option value="RSI">RSI</option>
-                        <!-- Add more strategies as needed -->
+                        <option value="EMA Crossover" selected>EMA Crossover (9/20/200)</option>
                     </select>
                 </div>
                 <div class="col-md-2 mb-3">
@@ -50,17 +48,28 @@
 </div>
 
 <!-- Backtest Results -->
-<div class="card bg-dark border-0 shadow">
-    <div class="card-body">
-        <h5 class="card-title"><i class="fas fa-chart-pie me-2"></i>Backtest Results</h5>
-        <div class="row">
-            <div class="col-md-4">
+<div class="row">
+    <div class="col-md-8">
+        <div class="card bg-dark border-0 shadow">
+            <div class="card-body">
+                <h5 class="card-title"><i class="fas fa-chart-pie me-2"></i>Price and Volume</h5>
+                <div id="backtest-chart" style="height: 600px;">{{ chart_html | safe }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card bg-dark border-0 shadow">
+            <div class="card-body">
+                <h5 class="card-title"><i class="fas fa-chart-bar me-2"></i>Backtest Metrics</h5>
                 <p><strong>Total Return:</strong> <span id="total-return">{{ total_return }}%</span></p>
                 <p><strong>Max Drawdown:</strong> <span id="max-drawdown">{{ max_drawdown }}%</span></p>
                 <p><strong>Sharpe Ratio:</strong> <span id="sharpe-ratio">{{ sharpe_ratio }}</span></p>
-            </div>
-            <div class="col-md-8">
-                <div id="backtest-chart" style="height: 600px;">{{ chart_html | safe }}</div>
+                
+                <h5 class="mt-4"><i class="fas fa-bar-chart me-2"></i>PNL</h5>
+                <div id="pnl-chart" style="height: 300px;"></div>
+
+                <h5 class="mt-4"><i class="fas fa-table me-2"></i>Trade Log</h5>
+                <div id="trade-log" style="height: 300px; overflow-y: auto;"></div>
             </div>
         </div>
     </div>
@@ -81,8 +90,38 @@ document.getElementById('backtest-form').addEventListener('submit', async functi
             document.getElementById('total-return').textContent = `${result.total_return.toFixed(2)}%`;
             document.getElementById('max-drawdown').textContent = `-${result.max_drawdown.toFixed(2)}%`;
             document.getElementById('sharpe-ratio').textContent = result.sharpe_ratio.toFixed(2);
-            // Update chart
+
+            // Update main chart
             Plotly.react('backtest-chart', result.chart_json.data, result.chart_json.layout);
+
+            // Update PNL chart
+            if (result.pnl_data) {
+                Plotly.newPlot('pnl-chart', [result.pnl_data], {
+                    title: 'PNL %',
+                    template: 'plotly_dark',
+                    height: 300,
+                    showlegend: true,
+                    xaxis: { title: 'Date' },
+                    yaxis: { title: 'PNL %', showgrid: true }
+                });
+            }
+
+            // Update trade log table
+            if (result.trade_log) {
+                const tradeTable = {
+                    data: [{
+                        type: 'table',
+                        header: result.trade_log.header,
+                        cells: result.trade_log.cells
+                    }],
+                    layout: {
+                        template: 'plotly_dark',
+                        height: 300,
+                        width: null
+                    }
+                };
+                Plotly.newPlot('trade-log', tradeTable.data, tradeTable.layout);
+            }
         } else {
             alert(result.error || 'Error running backtest');
         }
