@@ -159,11 +159,99 @@ document.addEventListener('DOMContentLoaded', function () {
                 document.getElementById('sharpe-ratio').textContent = result.sharpe_ratio.toFixed(2);
                 document.getElementById('final-balance').textContent = `$${result.final_balance.toFixed(2)}`;
 
-                // Update price/volume chart
+                // Update price/volume chart with proper subplots
                 Plotly.purge('trading-chart');
-                Plotly.newPlot('trading-chart', result.chart_json.data, result.chart_json.layout)
-                    .then(() => console.log('Price/Volume chart rendered'))
-                    .catch(err => console.error('Price/Volume error:', err));
+                
+                // Create layout with two subplots
+                const layout = {
+                    template: 'plotly_dark',
+                    height: 600,
+                    grid: {
+                        rows: 2,
+                        columns: 1,
+                        pattern: 'independent',
+                        roworder: 'top to bottom'
+                    },
+                    yaxis: {
+                        title: 'Price ($)',
+                        domain: [0.3, 1],
+                        showgrid: true
+                    },
+                    yaxis2: {
+                        title: 'Volume',
+                        domain: [0, 0.2],
+                        showgrid: true
+                    },
+                    xaxis: {
+                        rangeslider: { visible: false },
+                        showgrid: true
+                    },
+                    xaxis2: {
+                        showticklabels: false,
+                        showgrid: true,
+                        anchor: 'y2'
+                    },
+                    margin: { t: 30, b: 30, l: 60, r: 30 },
+                    hovermode: 'x unified',
+                    showlegend: true,
+                    legend: { orientation: 'h', y: 1.1 }
+                };
+
+                // Ensure we have properly formatted candlestick data
+                let candles, volume;
+                
+                if (result.chart_json && result.chart_json.data) {
+                    // Extract candlestick and volume data from result
+                    candles = result.chart_json.data.find(d => d.type === 'candlestick') || createDefaultCandlestickData(result);
+                    volume = result.chart_json.data.find(d => d.type === 'bar' && d.name === 'Volume') || createDefaultVolumeData(result);
+                    
+                    // Ensure proper subplot assignment
+                    candles.yaxis = 'y';
+                    candles.xaxis = 'x';
+                    volume.yaxis = 'y2';
+                    volume.xaxis = 'x';
+                    
+                    // Enhanced styling
+                    candles.increasing = { line: { color: '#26a69a' }, fillcolor: '#26a69a' };
+                    candles.decreasing = { line: { color: '#ef5350' }, fillcolor: '#ef5350' };
+                    volume.marker = { 
+                        color: volume.marker?.color || '#7986CB', 
+                        opacity: 0.7 
+                    };
+                    
+                    // Create signals trace if available
+                    let signals = [];
+                    if (result.signals && Array.isArray(result.signals)) {
+                        signals = [
+                            {
+                                type: 'scatter',
+                                x: result.signals.filter(s => s.action === 'buy').map(s => s.date),
+                                y: result.signals.filter(s => s.action === 'buy').map(s => s.price),
+                                mode: 'markers',
+                                name: 'Buy Signal',
+                                marker: { color: 'green', size: 10, symbol: 'triangle-up' },
+                                yaxis: 'y'
+                            },
+                            {
+                                type: 'scatter',
+                                x: result.signals.filter(s => s.action === 'sell').map(s => s.date),
+                                y: result.signals.filter(s => s.action === 'sell').map(s => s.price),
+                                mode: 'markers',
+                                name: 'Sell Signal',
+                                marker: { color: 'red', size: 10, symbol: 'triangle-down' },
+                                yaxis: 'y'
+                            }
+                        ];
+                    }
+                    
+                    // Plot the chart with the combined data
+                    Plotly.newPlot('trading-chart', [candles, volume, ...signals], layout)
+                        .then(() => console.log('Price/Volume chart rendered'))
+                        .catch(err => console.error('Price/Volume error:', err));
+                } else {
+                    console.error('Invalid chart data structure');
+                    chartContainer.innerHTML = '<p class="text-white">Error: Invalid chart data structure</p>';
+                }
 
                 // Update PNL chart
                 Plotly.purge('pnl-chart');
@@ -204,6 +292,51 @@ document.addEventListener('DOMContentLoaded', function () {
                 alert('Failed to run backtest: ' + error.message);
             }
         });
+    }
+    
+    // Helper functions to create default data structures if needed
+    function createDefaultCandlestickData(result) {
+        if (!result.ohlc || !Array.isArray(result.ohlc)) {
+            console.warn('No OHLC data available');
+            return {
+                type: 'candlestick',
+                name: 'Price',
+                x: [],
+                open: [],
+                high: [],
+                low: [],
+                close: []
+            };
+        }
+        
+        return {
+            type: 'candlestick',
+            name: 'Price',
+            x: result.ohlc.map(d => d.date),
+            open: result.ohlc.map(d => d.open),
+            high: result.ohlc.map(d => d.high),
+            low: result.ohlc.map(d => d.low),
+            close: result.ohlc.map(d => d.close)
+        };
+    }
+    
+    function createDefaultVolumeData(result) {
+        if (!result.volume || !Array.isArray(result.volume)) {
+            console.warn('No volume data available');
+            return {
+                type: 'bar',
+                name: 'Volume',
+                x: [],
+                y: []
+            };
+        }
+        
+        return {
+            type: 'bar',
+            name: 'Volume',
+            x: result.volume.map(d => d.date),
+            y: result.volume.map(d => d.value)
+        };
     }
 });
 </script>
