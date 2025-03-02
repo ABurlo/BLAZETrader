@@ -1,3 +1,4 @@
+import pandas as pd  # Add this import for pd.Series
 from src.data.data_manager import DataManager
 from src.trading.portfolio import Portfolio
 from src.trading.orders import OrderManager
@@ -48,7 +49,7 @@ class TradingEngine:
     
     def run_realtime(self, symbol):
         def bar_callback(bars):
-            row = pd.Series({
+            row = pd.Series({  # pd is now defined
                 'date': bars.time,
                 'open': bars.open_,
                 'high': bars.high,

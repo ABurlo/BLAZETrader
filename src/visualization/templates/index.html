@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Trading Dashboard</title>
-    <!-- Load a specific version of Plotly.js for reliability -->
-    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <!-- Load Plotly.js locally -->
+    <script src="/static/plotly-2.32.0.min.js"></script>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -131,6 +131,7 @@
                 // Get the chart HTML
                 const chartHtml = await response.text();
                 console.log('Chart HTML received. Length:', chartHtml.length);
+                console.log('Chart HTML snippet:', chartHtml.substring(0, 500));
 
                 // Inject the chart HTML into the container
                 chartContainer.innerHTML = chartHtml;
@@ -138,18 +139,21 @@
 
                 // Manually re-render the chart using Plotly
                 const chartDiv = chartContainer.querySelector('div[id^="chart-"]');
-                if (chartDiv && window.Plotly) {
-                    try {
-                        const chartData = window.Plotly.d3.select(chartDiv).data();
-                        const chartLayout = window.Plotly.d3.select(chartDiv).layout();
-                        await window.Plotly.newPlot(chartDiv, chartData, chartLayout);
-                        console.log('Chart manually re-rendered with Plotly.newPlot');
-                    } catch (plotlyError) {
-                        console.error('Plotly rendering error:', plotlyError);
-                        throw new Error(`Plotly rendering failed: ${plotlyError.message}`);
-                    }
-                } else {
-                    throw new Error('Chart <div> not found or Plotly.js unavailable');
+                if (!chartDiv) {
+                    throw new Error('Chart <div> not found in the HTML');
+                }
+                if (!window.Plotly) {
+                    throw new Error('Plotly.js is unavailable');
+                }
+
+                try {
+                    const chartData = window.Plotly.d3.select(chartDiv).data();
+                    const chartLayout = window.Plotly.d3.select(chartDiv).layout();
+                    await window.Plotly.newPlot(chartDiv, chartData, chartLayout);
+                    console.log('Chart manually re-rendered with Plotly.newPlot');
+                } catch (plotlyError) {
+                    console.error('Plotly rendering error:', plotlyError);
+                    throw new Error(`Plotly rendering failed: ${plotlyError.message}`);
                 }
 
                 // Verify Plotly rendering
