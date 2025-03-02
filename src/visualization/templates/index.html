@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Trading Dashboard</title>
-    <!-- Load Plotly.js locally with the correct URL -->
-    <script src="https://cdn.plot.ly/plotly-3.0.1.js" onload="console.log('Plotly.js script tag loaded')" onerror="console.error('Failed to load Plotly.js')"></script>
+    <!-- Use a specific, recent version of Plotly.js -->
+    <script src="https://cdn.plot.ly/plotly-2.34.0.min.js" onload="console.log('Plotly.js loaded')" onerror="console.error('Failed to load Plotly.js')"></script>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -76,21 +76,18 @@
     </div>
 
     <script>
-        // Wait for Plotly.js to load
         async function waitForPlotly() {
             return new Promise((resolve, reject) => {
-                const maxAttempts = 50; // Try for 5 seconds (100ms * 50)
+                const maxAttempts = 50;
                 let attempts = 0;
-
                 const checkPlotly = setInterval(() => {
                     attempts++;
                     if (typeof Plotly !== 'undefined') {
                         clearInterval(checkPlotly);
-                        console.log('Plotly.js initialized successfully');
+                        console.log('Plotly.js initialized');
                         resolve();
                     } else if (attempts >= maxAttempts) {
                         clearInterval(checkPlotly);
-                        console.error('Plotly.js failed to initialize after 5 seconds');
                         reject(new Error('Plotly.js failed to load after 5 seconds'));
                     }
                 }, 100);
@@ -101,24 +98,13 @@
         const chartContainer = document.getElementById('chart-container');
 
         form.addEventListener('submit', async (event) => {
-            event.preventDefault(); // Prevent default form submission
-
-            // Get form data
+            event.preventDefault();
             const formData = new FormData(form);
-            const ticker = formData.get('ticker');
-            const start_date = formData.get('start_date');
-            const end_date = formData.get('end_date');
-
+            
             try {
-                // Show loading message
                 chartContainer.innerHTML = '<p>Loading chart...</p>';
-
-                // Ensure Plotly.js is loaded
-                console.log('Waiting for Plotly.js to load...');
                 await waitForPlotly();
 
-                // Send POST request to /generate_chart
-                console.log('Sending request to /generate_chart...');
                 const response = await fetch('/generate_chart', {
                     method: 'POST',
                     body: formData
@@ -129,39 +115,16 @@
                     throw new Error(errorText || 'Failed to generate chart');
                 }
 
-                // Get the chart HTML
                 const chartHtml = await response.text();
                 console.log('Chart HTML received. Length:', chartHtml.length);
                 console.log('Chart HTML snippet:', chartHtml.substring(0, 500));
-
-                // Inject the chart HTML into the container
                 chartContainer.innerHTML = chartHtml;
-                console.log('Chart HTML injected into container');
 
-                // Manually re-render the chart using Plotly
-                const chartDiv = chartContainer.querySelector('div[id^="chart-"]');
-                if (!chartDiv) {
-                    throw new Error('Chart <div> not found in the HTML');
-                }
-                if (!window.Plotly) {
-                    throw new Error('Plotly.js is unavailable');
-                }
-
-                try {
-                    const chartData = window.Plotly.d3.select(chartDiv).data();
-                    const chartLayout = window.Plotly.d3.select(chartDiv).layout();
-                    await window.Plotly.newPlot(chartDiv, chartData, chartLayout);
-                    console.log('Chart manually re-rendered with Plotly.newPlot');
-                } catch (plotlyError) {
-                    console.error('Plotly rendering error:', plotlyError);
-                    throw new Error(`Plotly rendering failed: ${plotlyError.message}`);
-                }
-
-                // Verify Plotly rendering
+                // Verify rendering
                 if (!document.querySelector('.plotly')) {
-                    throw new Error('Chart did not render (Plotly failed to initialize)');
+                    throw new Error('Chart did not render (Plotly may not have initialized)');
                 }
-
+                console.log('Chart rendered successfully');
             } catch (error) {
                 console.error('Error:', error);
                 chartContainer.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
