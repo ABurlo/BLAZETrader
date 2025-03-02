@@ -2,71 +2,147 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>IBKR Trading Dashboard</title>
-    <!-- Include Plotly.js from CDN -->
-    <script src="https://cdn.plot.ly/plotly-2.34.0.min.js"></script>
-    <!-- Include jQuery for AJAX -->
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <title>Interactive Brokers Trading Chart</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
     <style>
-        #chart-1 { width: 100%; height: 800px; }
-        .error { color: red; text-align: center; }
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f4f4f4;
+        }
+        .container {
+            max-width: 1200px;
+            margin: auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        .form-group {
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+        }
+        label {
+            margin-right: 10px;
+            font-weight: bold;
+            color: #555;
+            width: 120px;
+        }
+        input, select {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            width: 200px;
+        }
+        button {
+            padding: 10px 20px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        #error-message {
+            color: red;
+            text-align: center;
+            display: none;
+            margin-top: 10px;
+            font-size: 14px;
+        }
+        #chart-container {
+            margin-top: 20px;
+        }
     </style>
 </head>
 <body>
-    <h1>Interactive Brokers Trading Dashboard</h1>
-    
-    <!-- Form for user input -->
-    <form id="chart-form">
-        <label for="ticker">Ticker:</label>
-        <input type="text" id="ticker" name="ticker" value="{{ ticker }}" required>
-        
-        <label for="start_date">Start Date:</label>
-        <input type="date" id="start_date" name="start_date" value="{{ start_date }}" required>
-        
-        <label for="end_date">End Date:</label>
-        <input type="date" id="end_date" name="end_date" value="{{ end_date }}" required>
-        
-        <button type="submit">Update Chart</button>
-    </form>
+    <div class="container">
+        <h1>Market Data Visualizer</h1>
+        <form id="chart-form">
+            <div class="form-group">
+                <label for="ticker">Ticker:</label>
+                <input type="text" id="ticker" name="ticker" value="{{ ticker }}" required>
+            </div>
+            <div class="form-group">
+                <label for="start_date">Start Date:</label>
+                <input type="date" id="start_date" name="start_date" value="{{ start_date }}">
+            </div>
+            <div class="form-group">
+                <label for="end_date">End Date:</label>
+                <input type="date" id="end_date" name="end_date" value="{{ end_date }}">
+            </div>
+            <div class="form-group">
+                <label for="lookback_multiplier">Lookback Multiplier:</label>
+                <input type="number" id="lookback_multiplier" name="lookback_multiplier" value="{{ lookback_multiplier }}" min="1" placeholder="e.g., 5">
+            </div>
+            <div class="form-group">
+                <label for="bar_size">Timeframe:</label>
+                <select id="bar_size" name="bar_size">
+                    {% for bar_size in bar_sizes %}
+                        <option value="{{ bar_size }}" {% if bar_size == selected_bar_size %}selected{% endif %}>
+                            {{ bar_size }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group" style="justify-content: center;">
+                <button type="submit">Generate Chart</button>
+            </div>
+        </form>
+        <div id="error-message"></div>
+        <div id="chart-container">{{ chart_html | safe }}</div>
+    </div>
 
-    <!-- Chart container -->
-    <div id="chart-1">{{ chart_html | safe }}</div>
-    <div id="error-message" class="error"></div>
-
-    <!-- JavaScript to handle form submission and chart update -->
     <script>
-        $(document).ready(function() {
-            $('#chart-form').on('submit', function(event) {
-                event.preventDefault(); // Prevent default form submission
+        document.getElementById('chart-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const formData = new FormData(this);
+            const errorMessage = document.getElementById('error-message');
+            errorMessage.style.display = 'none';
 
-                // Clear any previous error message
-                $('#error-message').text('');
+            const startDate = formData.get('start_date');
+            const endDate = formData.get('end_date');
+            const lookbackMultiplier = formData.get('lookback_multiplier');
 
-                // Get form data
-                var formData = $(this).serialize();
+            // Validate that either lookback_multiplier or both dates are provided
+            if (!lookbackMultiplier && (!startDate || !endDate)) {
+                errorMessage.textContent = 'Please provide either a lookback multiplier or both start and end dates';
+                errorMessage.style.display = 'block';
+                return;
+            }
 
-                // Send AJAX request to generate chart
-                $.ajax({
-                    url: '/generate_chart',
-                    type: 'POST',
-                    data: formData,
-                    dataType: 'json',
-                    success: function(response) {
-                        if (response.error) {
-                            $('#error-message').text(response.error);
-                        } else {
-                            // Update the existing chart
-                            Plotly.newPlot('chart-1', response.data, response.layout);
-                        }
-                    },
-                    error: function(xhr, status, error) {
-                        console.log('AJAX Error:', status, error);
-                        console.log('Response:', xhr.responseText);
-                        $('#error-message').text('Failed to update chart. Check console for details.');
-                    }
+            // If lookback_multiplier is filled, clear start_date and end_date
+            if (lookbackMultiplier) {
+                formData.delete('start_date');
+                formData.delete('end_date');
+            }
+
+            try {
+                const response = await fetch('/generate_chart', {
+                    method: 'POST',
+                    body: formData
                 });
-            });
+                const result = await response.json();
+
+                if (response.ok) {
+                    Plotly.newPlot('chart-1', result.data, result.layout, { responsive: true });
+                } else {
+                    errorMessage.textContent = result.error || 'An error occurred while generating the chart';
+                    errorMessage.style.display = 'block';
+                }
+            } catch (error) {
+                errorMessage.textContent = 'Network error: ' + error.message;
+                errorMessage.style.display = 'block';
+            }
         });
     </script>
 </body>

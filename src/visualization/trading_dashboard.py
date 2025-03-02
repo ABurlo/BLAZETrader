@@ -7,6 +7,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.io as pio
 import json
+from pytz import timezone
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -16,11 +17,57 @@ logger = logging.getLogger(__name__)
 app = Quart(__name__, static_url_path='/static')
 app.static_folder = os.path.abspath(os.path.join(os.path.dirname(__file__), 'static'))
 
+# Supported TWS API bar sizes and their maximum duration strings
+SUPPORTED_DURATIONS = {
+    '1 min': '1 min',
+    '5 mins': '5 mins',
+    '15 mins': '15 mins',
+    '30 mins': '30 mins',
+    '1 hour': '1 hour',
+    '1 day': '1 day',
+    '1 week': '1 week',
+    '1 month': '1 month'
+}
+SUPPORTED_DURATION_STRINGS = {
+    '1 min': '1 D',
+    '5 mins': '5 D',
+    '15 mins': '10 D',
+    '30 mins': '20 D',
+    '1 hour': '30 D',
+    '1 day': '1 Y',
+    '1 week': '2 Y',
+    '1 month': '5 Y'
+}
+
+# Define timedelta multipliers for each bar size (in minutes for finer granularity)
+BAR_SIZE_MULTIPLIERS = {
+    '1 min': 1,         # 1 minute
+    '5 mins': 5,        # 5 minutes
+    '15 mins': 15,      # 15 minutes
+    '30 mins': 30,      # 30 minutes
+    '1 hour': 60,       # 60 minutes
+    '1 day': 1440,      # 24 hours * 60 minutes
+    '1 week': 10080,    # 7 days * 24 hours * 60 minutes
+    '1 month': 43200    # Approx 30 days * 24 hours * 60 minutes
+}
+
 class MarketDataVisualizer:
-    def __init__(self, ticker, start_date, end_date):
+    def __init__(self, ticker, start_date=None, end_date=None, lookback_multiplier=None, bar_size='1 day'):
         self.ticker = ticker.upper()
-        self.start_date = datetime.datetime.strptime(start_date, "%Y-%m-%d")
-        self.end_date = datetime.datetime.strptime(end_date, "%Y-%m-%d")
+        eastern = timezone('US/Eastern')
+        
+        if lookback_multiplier is not None:
+            # Use lookback multiplier based on bar_size
+            self.end_date = eastern.localize(datetime.datetime.now())
+            multiplier = int(lookback_multiplier)
+            minutes = BAR_SIZE_MULTIPLIERS[bar_size] * multiplier
+            self.start_date = self.end_date - datetime.timedelta(minutes=minutes)
+        else:
+            # Use explicit start and end dates
+            self.start_date = eastern.localize(datetime.datetime.strptime(start_date, "%Y-%m-%d"))
+            self.end_date = eastern.localize(datetime.datetime.strptime(end_date, "%Y-%m-%d"))
+        
+        self.bar_size = bar_size
         self.ib = None
         self.df = None
 
@@ -41,13 +88,34 @@ class MarketDataVisualizer:
             if self.ib is None or not self.ib.isConnected():
                 await self.connect_to_ib()
             
-            logger.info(f"Fetching data for {self.ticker} from {self.start_date} to {self.end_date}")
+            logger.info(f"Fetching data for {self.ticker} from {self.start_date} to {self.end_date} with bar size {self.bar_size}")
             contract = Stock(self.ticker, 'SMART', 'USD')
+            duration_str = SUPPORTED_DURATION_STRINGS.get(self.bar_size, '1 Y')
+
+            # Adjust duration based on date range to avoid exceeding TWS limits
+            days_diff = (self.end_date - self.start_date).days
+            if self.bar_size == '1 min' and days_diff > 1:
+                duration_str = f"{min(days_diff, 1)} D"
+            elif self.bar_size == '5 mins' and days_diff > 5:
+                duration_str = f"{min(days_diff, 5)} D"
+            elif self.bar_size == '15 mins' and days_diff > 10:
+                duration_str = f"{min(days_diff, 10)} D"
+            elif self.bar_size == '30 mins' and days_diff > 20:
+                duration_str = f"{min(days_diff, 20)} D"
+            elif self.bar_size == '1 hour' and days_diff > 30:
+                duration_str = f"{min(days_diff, 30)} D"
+            elif self.bar_size == '1 day' and days_diff > 365:
+                duration_str = f"{min(days_diff, 365)} D"
+            elif self.bar_size == '1 week' and days_diff > 730:
+                duration_str = f"{min(days_diff, 730)} D"
+            elif self.bar_size == '1 month' and days_diff > 1825:
+                duration_str = f"{min(days_diff, 1825)} D"
+
             bars = await self.ib.reqHistoricalDataAsync(
                 contract,
                 endDateTime=self.end_date,
-                durationStr=f'{int((self.end_date - self.start_date).days)} D',
-                barSizeSetting='1 day',
+                durationStr=duration_str,
+                barSizeSetting=self.bar_size,
                 whatToShow='TRADES',
                 useRTH=True
             )
@@ -61,8 +129,13 @@ class MarketDataVisualizer:
             if not all(col in self.df.columns for col in required_columns):
                 raise ValueError(f"Missing required columns: {self.df.columns.tolist()}")
             
+            # Set index and ensure it's a timezone-aware DatetimeIndex
             self.df.set_index('date', inplace=True)
             self.df.index = pd.to_datetime(self.df.index)
+            if self.df.index.tz is None:
+                self.df.index = self.df.index.tz_localize('US/Eastern')
+            else:
+                self.df.index = self.df.index.tz_convert('US/Eastern')
             return self.df
             
         except Exception as e:
@@ -81,6 +154,16 @@ class MarketDataVisualizer:
                 error_msg = f"No data available for {self.ticker} from {self.start_date.date()} to {self.end_date.date()}"
                 logger.error(error_msg)
                 return {'error': error_msg}
+
+            # Filter data to the requested date range
+            df = df[(df.index >= self.start_date) & (df.index <= self.end_date)]
+            if df.empty:
+                error_msg = f"No data within the specified range for {self.ticker} from {self.start_date.date()} to {self.end_date.date()}"
+                logger.error(error_msg)
+                return {'error': error_msg}
+
+            # Calculate total duration in days
+            total_days = (self.end_date - self.start_date).days
 
             logger.info(f"Creating chart for {self.ticker} with {len(df)} data points")
             candlestick = go.Candlestick(
@@ -106,19 +189,20 @@ class MarketDataVisualizer:
             )
 
             layout = go.Layout(
-                title=f'{self.ticker} Price and Volume from {self.start_date.date()} to {self.end_date.date()}',
+                title=f'{self.ticker} Price and Volume from {self.start_date.date()} to {self.end_date.date()} ({self.bar_size}, {total_days} days)',
                 yaxis_title='Price',
                 xaxis_title='Date',
                 template='plotly_white',
                 yaxis=dict(domain=[0.3, 1.0]),
                 yaxis2=dict(title='Volume', domain=[0, 0.2], overlaying='y', side='right'),
-                height=800
+                height=800,
+                xaxis_rangeslider_visible=False
             )
 
             fig = go.Figure(data=[candlestick, volume], layout=layout)
-            chart_json = pio.to_json(fig)  # Serialize to JSON string
+            chart_json = pio.to_json(fig)
             logger.info(f"Chart JSON generated for {self.ticker}. Length: {len(chart_json)}")
-            return json.loads(chart_json)  # Convert back to dict for jsonify
+            return json.loads(chart_json)
 
         except Exception as e:
             error_msg = f"Error generating chart: {str(e)}"
@@ -131,28 +215,56 @@ async def index():
     ticker = "AAPL"
     start_date = "2024-01-01"
     end_date = "2024-12-31"
-    visualizer = MarketDataVisualizer(ticker, start_date, end_date)
+    bar_size = "1 day"
+    visualizer = MarketDataVisualizer(ticker, start_date=start_date, end_date=end_date, bar_size=bar_size)
     chart_json = await visualizer.create_interactive_chart()
     chart_html = go.Figure(chart_json).to_html(full_html=False, include_plotlyjs='cdn', div_id="chart-1") if 'error' not in chart_json else f"<div style='color: red; text-align: center;'>{chart_json['error']}</div>"
-    return await render_template('ib_trading_chart.html', chart_html=chart_html, ticker=ticker, start_date=start_date, end_date=end_date)
+    return await render_template(
+        'ib_trading_chart.html',
+        chart_html=chart_html,
+        ticker=ticker,
+        start_date=start_date,
+        end_date=end_date,
+        lookback_multiplier='',
+        bar_sizes=SUPPORTED_DURATIONS.keys(),
+        selected_bar_size=bar_size
+    )
 
 @app.route('/generate_chart', methods=['POST'])
 async def generate_chart():
     """Handle chart generation requests from the frontend and return JSON."""
     form = await request.form
     ticker = form['ticker'].strip()
-    start_date = form['start_date'].strip()
-    end_date = form['end_date'].strip()
+    start_date = form.get('start_date', '').strip()
+    end_date = form.get('end_date', '').strip()
+    lookback_multiplier = form.get('lookback_multiplier', '').strip()
+    bar_size = form.get('bar_size', '1 day').strip()
 
-    logger.info(f"Received request: ticker={ticker}, start_date={start_date}, end_date={end_date}")
+    logger.info(f"Received request: ticker={ticker}, start_date={start_date}, end_date={end_date}, lookback_multiplier={lookback_multiplier}, bar_size={bar_size}")
     try:
-        start = datetime.datetime.strptime(start_date, "%Y-%m-%d")
-        end = datetime.datetime.strptime(end_date, "%Y-%m-%d")
-        if end <= start:
-            logger.error("Validation failed: End date <= start date")
-            return jsonify({'error': 'End date must be after start date'}), 400
+        if lookback_multiplier:
+            # Use lookback multiplier if provided
+            if not lookback_multiplier.isdigit():
+                raise ValueError("Lookback multiplier must be a positive integer")
+            lookback_multiplier = int(lookback_multiplier)
+            if lookback_multiplier <= 0:
+                raise ValueError("Lookback multiplier must be greater than 0")
+            visualizer = MarketDataVisualizer(ticker, lookback_multiplier=lookback_multiplier, bar_size=bar_size)
+        else:
+            # Use explicit dates if provided, ensure both are present
+            if not (start_date and end_date):
+                raise ValueError("Please provide both start date and end date, or use a lookback multiplier")
+            start = datetime.datetime.strptime(start_date, "%Y-%m-%d")
+            end = datetime.datetime.strptime(end_date, "%Y-%m-%d")
+            if end <= start:
+                logger.error("Validation failed: End date <= start date")
+                return jsonify({'error': 'End date must be after start date'}), 400
+            visualizer = MarketDataVisualizer(ticker, start_date=start_date, end_date=end_date, bar_size=bar_size)
 
-        visualizer = MarketDataVisualizer(ticker, start_date, end_date)
+        if bar_size not in SUPPORTED_DURATIONS:
+            logger.error(f"Invalid bar size: {bar_size}")
+            return jsonify({'error': f"Invalid bar size: {bar_size}"}, SUPPORTED_DURATIONS), 400
+
         chart_json = await visualizer.create_interactive_chart()
         if 'error' in chart_json:
             logger.error(f"Chart generation failed: {chart_json['error']}")
@@ -163,9 +275,7 @@ async def generate_chart():
     
     except ValueError as e:
         logger.error(f"ValueError in generate_chart: {str(e)}")
-        return jsonify({'error': f"Invalid date format or ticker: {str(e)}"}), 400
+        return jsonify({'error': f"Invalid input: {str(e)}"}), 400
     except Exception as e:
         logger.error(f"Unexpected error in generate_chart: {str(e)}", exc_info=True)
         return jsonify({'error': f"Error: {str(e)}"}), 500
-
-# No if __name__ == "__main__": block; Uvicorn runs the app directly
