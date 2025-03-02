@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+
+{% block title %}Portfolio - BLAZETrader{% endblock %}
+
+{% block content %}
+<h2 class="mb-4">Portfolio</h2>
+
+<!-- Portfolio Summary -->
+<div class="row mb-4">
+    <div class="col-md-4">
+        <div class="card bg-dark border-0 shadow">
+            <div class="card-body">
+                <h5 class="card-title"><i class="fas fa-wallet me-2"></i>Total Value</h5>
+                <p class="card-text display-6">$125,430.50</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card bg-dark border-0 shadow">
+            <div class="card-body">
+                <h5 class="card-title"><i class="fas fa-chart-line me-2"></i>Day Change</h5>
+                <p class="card-text display-6 text-success">+2.3%</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card bg-dark border-0 shadow">
+            <div class="card-body">
+                <h5 class="card-title"><i class="fas fa-percentage me-2"></i>Overall Return</h5>
+                <p class="card-text display-6 text-success">+18.7%</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Holdings Table -->
+<div class="card bg-dark border-0 shadow">
+    <div class="card-body">
+        <h5 class="card-title"><i class="fas fa-list me-2"></i>Your Holdings</h5>
+        <table class="table table-dark table-hover">
+            <thead>
+                <tr>
+                    <th>Ticker</th>
+                    <th>Shares</th>
+                    <th>Price</th>
+                    <th>Value</th>
+                    <th>Change</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>AAPL</td>
+                    <td>100</td>
+                    <td>$175.30</td>
+                    <td>$17,530.00</td>
+                    <td class="text-success">+1.2%</td>
+                </tr>
+                <tr>
+                    <td>TSLA</td>
+                    <td>50</td>
+                    <td>$210.45</td>
+                    <td>$10,522.50</td>
+                    <td class="text-danger">-0.8%</td>
+                </tr>
+                <!-- Add more rows dynamically -->
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

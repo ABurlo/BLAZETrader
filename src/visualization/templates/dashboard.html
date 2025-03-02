@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - BLAZETrader{% endblock %}
+
+{% block content %}
+<h2 class="mb-4">Dashboard</h2>
+
+<!-- Chart Generation Form -->
+<div class="card bg-dark border-0 shadow mb-4">
+    <div class="card-body">
+        <h5 class="card-title"><i class="fas fa-chart-line me-2"></i>Generate Chart</h5>
+        <form id="chartForm" method="POST" action="{{ url_for('generate_chart') }}">
+            <div class="row">
+                <div class="col-md-3 mb-3">
+                    <label for="ticker" class="form-label">Ticker</label>
+                    <input type="text" class="form-control bg-dark text-light border-secondary" id="ticker" name="ticker" value="{{ ticker }}" required>
+                </div>
+                <div class="col-md-3 mb-3">
+                    <label for="start_date" class="form-label">Start Date</label>
+                    <input type="date" class="form-control bg-dark text-light border-secondary" id="start_date" name="start_date" value="{{ start_date }}">
+                </div>
+                <div class="col-md-3 mb-3">
+                    <label for="end_date" class="form-label">End Date</label>
+                    <input type="date" class="form-control bg-dark text-light border-secondary" id="end_date" name="end_date" value="{{ end_date }}">
+                </div>
+                <div class="col-md-3 mb-3">
+                    <label for="lookback_multiplier" class="form-label">Lookback Multiplier</label>
+                    <input type="number" class="form-control bg-dark text-light border-secondary" id="lookback_multiplier" name="lookback_multiplier" value="{{ lookback_multiplier }}" placeholder="e.g., 5">
+                </div>
+                <div class="col-md-3 mb-3">
+                    <label for="bar_size" class="form-label">Timeframe</label>
+                    <select class="form-control bg-dark text-light border-secondary" id="bar_size" name="bar_size">
+                        {% for bar_size in bar_sizes %}
+                        <option value="{{ bar_size }}" {% if bar_size == selected_bar_size %}selected{% endif %}>{{ bar_size }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-3 d-flex align-items-end">
+                    <button type="submit" class="btn btn-primary w-100">
+                        <i class="fas fa-sync-alt me-2"></i>Generate Chart
+                    </button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Chart Display -->
+<div id="chart-container">
+    {{ chart_html | safe }}
+</div>
+{% endblock %}

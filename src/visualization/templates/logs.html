@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block title %}Logs - BLAZETrader{% endblock %}
+
+{% block content %}
+<h2 class="mb-4">Logs</h2>
+
+<div class="card bg-dark border-0 shadow">
+    <div class="card-body">
+        <h5 class="card-title"><i class="fas fa-file-alt me-2"></i>System Logs</h5>
+        <table class="table table-dark table-hover">
+            <thead>
+                <tr>
+                    <th>Timestamp</th>
+                    <th>Level</th>
+                    <th>Message</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>2025-03-02 16:50:00</td>
+                    <td class="text-info">INFO</td>
+                    <td>Connected to Interactive Brokers TWS</td>
+                </tr>
+                <tr>
+                    <td>2025-03-02 16:51:00</td>
+                    <td class="text-success">INFO</td>
+                    <td>Data fetched successfully for AAPL</td>
+                </tr>
+                <!-- Add more rows dynamically -->
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

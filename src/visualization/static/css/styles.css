@@ -1,0 +1,73 @@
+body {
+    background-color: #1a1a1a;
+    color: #e0e0e0;
+}
+
+.navbar {
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+}
+
+.navbar-brand i {
+    color: #ff4500;
+}
+
+.nav-link {
+    color: #e0e0e0 !important;
+    transition: color 0.3s ease;
+}
+
+.nav-link:hover {
+    color: #ff4500 !important;
+}
+
+.nav-link.active {
+    color: #ff4500 !important;
+    font-weight: bold;
+    border-bottom: 2px solid #ff4500;
+}
+
+.card {
+    background-color: #2a2a2a;
+    border: none;
+    border-radius: 8px;
+}
+
+.card-title i {
+    color: #ff4500;
+}
+
+.form-control {
+    background-color: #333;
+    border-color: #555;
+    color: #e0e0e0;
+}
+
+.form-control:focus {
+    background-color: #444;
+    border-color: #ff4500;
+    color: #e0e0e0;
+    box-shadow: 0 0 5px rgba(255, 69, 0, 0.5);
+}
+
+.btn-primary {
+    background-color: #ff4500;
+    border-color: #ff4500;
+}
+
+.btn-primary:hover {
+    background-color: #e03e00;
+    border-color: #e03e00;
+}
+
+.table-dark {
+    background-color: #2a2a2a;
+}
+
+.table-dark th,
+.table-dark td {
+    border-color: #444;
+}
+
+footer {
+    border-top: 1px solid #444;
+}

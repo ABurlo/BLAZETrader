@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+
+{% block title %}Strategies - BLAZETrader{% endblock %}
+
+{% block content %}
+<h2 class="mb-4">Trading Strategies</h2>
+
+<!-- Add Strategy Form -->
+<div class="card bg-dark border-0 shadow mb-4">
+    <div class="card-body">
+        <h5 class="card-title"><i class="fas fa-cogs me-2"></i>Add New Strategy</h5>
+        <form>
+            <div class="row">
+                <div class="col-md-4 mb-3">
+                    <label for="strategy_name" class="form-label">Strategy Name</label>
+                    <input type="text" class="form-control bg-dark text-light border-secondary" id="strategy_name" placeholder="e.g., Moving Average Crossover">
+                </div>
+                <div class="col-md-4 mb-3">
+                    <label for="strategy_type" class="form-label">Type</label>
+                    <select class="form-control bg-dark text-light border-secondary" id="strategy_type">
+                        <option>Trend Following</option>
+                        <option>Mean Reversion</option>
+                        <option>Breakout</option>
+                    </select>
+                </div>
+                <div class="col-md-4 d-flex align-items-end">
+                    <button type="submit" class="btn btn-primary w-100">
+                        <i class="fas fa-plus me-2"></i>Add Strategy
+                    </button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Strategies Table -->
+<div class="card bg-dark border-0 shadow">
+    <div class="card-body">
+        <h5 class="card-title"><i class="fas fa-list me-2"></i>Your Strategies</h5>
+        <table class="table table-dark table-hover">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Type</th>
+                    <th>Performance</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Moving Average Crossover</td>
+                    <td>Trend Following</td>
+                    <td>+15.3%</td>
+                    <td>
+                        <button class="btn btn-sm btn-primary"><i class="fas fa-edit"></i></button>
+                        <button class="btn btn-sm btn-danger"><i class="fas fa-trash"></i></button>
+                    </td>
+                </tr>
+                <!-- Add more rows dynamically -->
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

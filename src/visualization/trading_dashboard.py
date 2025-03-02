@@ -242,9 +242,15 @@ class MarketDataVisualizer:
             logger.error(error_msg)
             return {'error': error_msg}
 
+# Routes for all pages
 @app.route('/')
 async def index():
-    """Render the main dashboard with an initial chart."""
+    """Render the landing page."""
+    return await render_template('home.html')
+
+@app.route('/dashboard')
+async def dashboard():
+    """Render the dashboard with an initial chart."""
     ticker = "AAPL"
     start_date = "2024-01-01"
     end_date = "2024-12-31"
@@ -253,7 +259,7 @@ async def index():
     chart_json = await visualizer.create_interactive_chart()
     chart_html = go.Figure(chart_json).to_html(full_html=False, include_plotlyjs='cdn', div_id="chart-1") if 'error' not in chart_json else f"<div style='color: red; text-align: center;'>{chart_json['error']}</div>"
     return await render_template(
-        'ib_trading_chart.html',
+        'dashboard.html',
         chart_html=chart_html,
         ticker=ticker,
         start_date=start_date,
@@ -262,6 +268,31 @@ async def index():
         bar_sizes=SUPPORTED_DURATIONS.keys(),
         selected_bar_size=bar_size
     )
+
+@app.route('/strategies')
+async def strategies():
+    """Render the strategies page."""
+    return await render_template('strategies.html')
+
+@app.route('/portfolio')
+async def portfolio():
+    """Render the portfolio page."""
+    return await render_template('portfolio.html')
+
+@app.route('/backtest')
+async def backtest():
+    """Render the backtest page."""
+    return await render_template('backtest.html')
+
+@app.route('/settings')
+async def settings():
+    """Render the settings page."""
+    return await render_template('settings.html')
+
+@app.route('/logs')
+async def logs():
+    """Render the logs page."""
+    return await render_template('logs.html')
 
 @app.route('/generate_chart', methods=['POST'])
 async def generate_chart():
@@ -312,3 +343,7 @@ async def generate_chart():
     except Exception as e:
         logger.error(f"Unexpected error in generate_chart: {str(e)}", exc_info=True)
         return jsonify({'error': f"Error: {str(e)}"}), 500
+
+if __name__ == "__main__":
+    # Run the Quart app
+    app.run(debug=True)
