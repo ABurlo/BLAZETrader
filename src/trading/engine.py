@@ -16,10 +16,19 @@ class TradingEngine:
         self.ib = self.data_mgr.ib
     
     async def initialize(self):
-        await self.data_mgr.connect()
+        """Initialize the trading engine by connecting to IBKR."""
+        try:
+            await self.data_mgr.connect()
+            self.logger.global_logger.info("TradingEngine initialized successfully")
+        except Exception as e:
+            self.logger.global_logger.error(f"Failed to initialize TradingEngine: {e}")
+            raise
     
     def run_backtest(self, symbol, start_date, end_date, timeframe="1 day"):
         df = self.data_mgr.fetch_historical_data(symbol, start_date, end_date, timeframe)
+        if df is None or df.empty:
+            self.logger.global_logger.error(f"No data returned for {symbol}")
+            return None, 0.0
         self.portfolio.reset()
         
         for i, row in df.iterrows():
@@ -33,8 +42,9 @@ class TradingEngine:
                 self.limits.update_trade_result(row['date'], is_win)
             self.portfolio.update(row['close'])
             
-        self.logger.global_logger.info(f"Backtest completed. PNL: ${self.portfolio.get_pnl():.2f}")
-        return df, self.portfolio.get_pnl()
+        pnl = self.portfolio.get_pnl()
+        self.logger.global_logger.info(f"Backtest completed. PNL: ${pnl:.2f}")
+        return df, pnl
     
     def run_realtime(self, symbol):
         def bar_callback(bars):

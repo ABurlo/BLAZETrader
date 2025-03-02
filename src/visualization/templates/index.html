@@ -2,107 +2,164 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Trading Dashboard</title>
+    <!-- Load a specific version of Plotly.js for reliability -->
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
     <style>
         body {
             font-family: Arial, sans-serif;
             margin: 0;
             padding: 0;
             display: flex;
-            min-height: 100vh;
+            height: 100vh;
         }
-        .container {
-            display: flex;
-            width: 100%;
-            height: 100%;
-        }
-        .left-column {
-            width: 20%;
-            padding: 20px;
+        .sidebar {
+            width: 250px;
             background-color: #f0f0f0;
-            box-sizing: border-box;
-            overflow-y: auto;
-        }
-        .right-column {
-            width: 80%;
             padding: 20px;
-            box-sizing: border-box;
-            overflow-y: auto;
+            box-shadow: 2px 0 5px rgba(0,0,0,0.1);
         }
-        .form-group {
-            margin-bottom: 15px;
+        .sidebar h1 {
+            font-size: 24px;
+            margin-bottom: 20px;
         }
-        label {
+        .sidebar label {
             display: block;
             margin-bottom: 5px;
+            font-weight: bold;
         }
-        input {
+        .sidebar input {
             width: 100%;
             padding: 8px;
-            box-sizing: border-box;
+            margin-bottom: 15px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
         }
-        button {
-            background-color: #4CAF50;
+        .sidebar button {
+            width: 100%;
+            padding: 10px;
+            background-color: #28a745;
             color: white;
-            padding: 10px 20px;
             border: none;
             border-radius: 4px;
             cursor: pointer;
-            width: 100%;
         }
-        button:hover {
-            background-color: #45a049;
+        .sidebar button:hover {
+            background-color: #218838;
         }
-        #chart-container {
-            width: 100%;
-            height: 100%;
+        .chart-container {
+            flex: 1;
+            padding: 20px;
+            overflow: auto;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="left-column">
-            <h1>Trading Dashboard</h1>
-            <form id="chartForm" action="/generate_chart" method="post">
-                <div class="form-group">
-                    <label for="ticker">Ticker Symbol:</label>
-                    <input type="text" id="ticker" name="ticker" value="{{ ticker }}" required>
-                </div>
-                <div class="form-group">
-                    <label for="start_date">Start Date (YYYY-MM-DD):</label>
-                    <input type="date" id="start_date" name="start_date" value="{{ start_date }}" required>
-                </div>
-                <div class="form-group">
-                    <label for="end_date">End Date (YYYY-MM-DD):</label>
-                    <input type="date" id="end_date" name="end_date" value="{{ end_date }}" required>
-                </div>
-                <button type="submit">Run</button>
-            </form>
-        </div>
-        <div class="right-column" id="chart-container">
-            <!-- Chart will be loaded here via the server response -->
-        </div>
+    <div class="sidebar">
+        <h1>Trading Dashboard</h1>
+        <form id="chart-form">
+            <label for="ticker">Ticker Symbol:</label>
+            <input type="text" id="ticker" name="ticker" value="{{ ticker }}" required>
+
+            <label for="start_date">Start Date (YYYY-MM-DD):</label>
+            <input type="date" id="start_date" name="start_date" value="{{ start_date }}" required>
+
+            <label for="end_date">End Date (YYYY-MM-DD):</label>
+            <input type="date" id="end_date" name="end_date" value="{{ end_date }}" required>
+
+            <button type="submit">Run</button>
+        </form>
+    </div>
+    <div class="chart-container" id="chart-container">
+        <!-- Chart will be injected here -->
     </div>
 
     <script>
-        document.getElementById('chartForm').addEventListener('submit', async function(e) {
-            e.preventDefault();
-            const formData = new FormData(this);
+        // Wait for Plotly.js to load
+        async function waitForPlotly() {
+            return new Promise((resolve, reject) => {
+                const maxAttempts = 50; // Try for 5 seconds (100ms * 50)
+                let attempts = 0;
+
+                const checkPlotly = setInterval(() => {
+                    attempts++;
+                    if (typeof Plotly !== 'undefined') {
+                        clearInterval(checkPlotly);
+                        resolve();
+                    } else if (attempts >= maxAttempts) {
+                        clearInterval(checkPlotly);
+                        reject(new Error('Plotly.js failed to load after 5 seconds'));
+                    }
+                }, 100);
+            });
+        }
+
+        const form = document.getElementById('chart-form');
+        const chartContainer = document.getElementById('chart-container');
+
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault(); // Prevent default form submission
+
+            // Get form data
+            const formData = new FormData(form);
+            const ticker = formData.get('ticker');
+            const start_date = formData.get('start_date');
+            const end_date = formData.get('end_date');
+
             try {
+                // Show loading message
+                chartContainer.innerHTML = '<p>Loading chart...</p>';
+
+                // Ensure Plotly.js is loaded
+                console.log('Waiting for Plotly.js to load...');
+                await waitForPlotly();
+                console.log('Plotly.js loaded successfully');
+
+                // Send POST request to /generate_chart
+                console.log('Sending request to /generate_chart...');
                 const response = await fetch('/generate_chart', {
                     method: 'POST',
                     body: formData
                 });
-                if (response.ok) {
-                    const text = await response.text();
-                    const container = document.getElementById('chart-container');
-                    container.innerHTML = text;  // Directly embed the HTML response
-                } else {
-                    const text = await response.text();
-                    alert(`Error: ${text}`);
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(errorText || 'Failed to generate chart');
                 }
+
+                // Get the chart HTML
+                const chartHtml = await response.text();
+                console.log('Chart HTML received. Length:', chartHtml.length);
+
+                // Inject the chart HTML into the container
+                chartContainer.innerHTML = chartHtml;
+                console.log('Chart HTML injected into container');
+
+                // Manually re-render the chart using Plotly
+                const chartDiv = chartContainer.querySelector('div[id^="chart-"]');
+                if (chartDiv && window.Plotly) {
+                    try {
+                        const chartData = window.Plotly.d3.select(chartDiv).data();
+                        const chartLayout = window.Plotly.d3.select(chartDiv).layout();
+                        await window.Plotly.newPlot(chartDiv, chartData, chartLayout);
+                        console.log('Chart manually re-rendered with Plotly.newPlot');
+                    } catch (plotlyError) {
+                        console.error('Plotly rendering error:', plotlyError);
+                        throw new Error(`Plotly rendering failed: ${plotlyError.message}`);
+                    }
+                } else {
+                    throw new Error('Chart <div> not found or Plotly.js unavailable');
+                }
+
+                // Verify Plotly rendering
+                if (!document.querySelector('.plotly')) {
+                    throw new Error('Chart did not render (Plotly failed to initialize)');
+                }
+
             } catch (error) {
-                alert(`Network error: ${error.message}`);
+                console.error('Error:', error);
+                chartContainer.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
             }
         });
     </script>

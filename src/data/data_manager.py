@@ -10,27 +10,40 @@ class DataManager:
         self.data_cache = {}
     
     async def connect(self):
-        await self.ib.connectAsync('127.0.0.1', 7497, clientId=1)
-        self.logger.global_logger.info("Connected to IBKR")
+        """Connect to IBKR asynchronously."""
+        try:
+            await self.ib.connectAsync('127.0.0.1', 7497, clientId=1)
+            self.logger.global_logger.info("Connected to IBKR")
+        except Exception as e:
+            self.logger.global_logger.error(f"Failed to connect to IBKR: {e}")
+            raise
     
     def fetch_historical_data(self, symbol, start_date, end_date, timeframe="1 day"):
-        contract = Stock(symbol, 'SMART', 'USD')
-        self.ib.qualifyContracts(contract)
-        bars = self.ib.reqHistoricalData(
-            contract,
-            endDateTime=end_date,
-            durationStr=f"{(end_date - start_date).days} D",
-            barSizeSetting=timeframe,
-            whatToShow='TRADES',
-            useRTH=True,
-            formatDate=1
-        )
-        df = self._bars_to_df(bars)
-        self.data_cache[symbol] = df
-        self.logger.global_logger.info(f"Fetched historical data for {symbol}")
-        return df
+        """Fetch historical data synchronously (for backtesting)."""
+        try:
+            contract = Stock(symbol, 'SMART', 'USD')
+            self.ib.qualifyContracts(contract)
+            bars = self.ib.reqHistoricalData(
+                contract,
+                endDateTime=end_date,
+                durationStr=f"{(end_date - start_date).days} D",
+                barSizeSetting=timeframe,
+                whatToShow='TRADES',
+                useRTH=True,
+                formatDate=1
+            )
+            if not bars:
+                raise ValueError(f"No data returned for {symbol}")
+            df = self._bars_to_df(bars)
+            self.data_cache[symbol] = df
+            self.logger.global_logger.info(f"Fetched historical data for {symbol}")
+            return df
+        except Exception as e:
+            self.logger.global_logger.error(f"Error fetching data for {symbol}: {e}")
+            return pd.DataFrame()  # Return empty DF instead of None
     
     def req_real_time_bars(self, symbol, callback):
+        """Subscribe to real-time bars."""
         contract = Stock(symbol, 'SMART', 'USD')
         self.ib.qualifyContracts(contract)
         self.ib.reqRealTimeBars(
