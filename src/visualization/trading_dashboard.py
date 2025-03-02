@@ -561,4 +561,4 @@ def calculate_total_change(portfolio):
     return ((total_current_value - total_initial_value) / total_initial_value) * 100
 
 if __name__ == "__main__":
-    app.run(debug=True, host='0.0.0.0', port=8000)
+    app.run(debug=True, host='172.20.10.3', port=8000)

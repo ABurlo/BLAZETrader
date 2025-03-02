@@ -198,12 +198,66 @@ document.addEventListener('DOMContentLoaded', function () {
                 };
 
                 // Ensure we have properly formatted candlestick data
+                // Ensure we have properly formatted candlestick data
                 let candles, volume;
-                
+
                 if (result.chart_json && result.chart_json.data) {
-                    // Extract candlestick and volume data from result
-                    candles = result.chart_json.data.find(d => d.type === 'candlestick') || createDefaultCandlestickData(result);
-                    volume = result.chart_json.data.find(d => d.type === 'bar' && d.name === 'Volume') || createDefaultVolumeData(result);
+                    // Check if data is in expected format, or try to build from raw data
+                    const candleData = result.chart_json.data.find(d => d.type === 'candlestick');
+                    
+                    if (candleData && candleData.open && candleData.open.length > 0) {
+                        // Use existing candlestick data if available and valid
+                        candles = candleData;
+                    } else if (result.ohlc && Array.isArray(result.ohlc) && result.ohlc.length > 0) {
+                        // Create candlestick data from raw OHLC array
+                        candles = {
+                            type: 'candlestick',
+                            name: 'Price',
+                            x: result.ohlc.map(d => d.date || d.time),
+                            open: result.ohlc.map(d => parseFloat(d.open)),
+                            high: result.ohlc.map(d => parseFloat(d.high)),
+                            low: result.ohlc.map(d => parseFloat(d.low)),
+                            close: result.ohlc.map(d => parseFloat(d.close))
+                        };
+                    } else if (result.price && Array.isArray(result.price) && result.price.length > 0) {
+                        // Fallback to line chart if only price array is available
+                        candles = {
+                            type: 'scatter',
+                            name: 'Price',
+                            x: result.price.map(d => d.date || d.time),
+                            y: result.price.map(d => parseFloat(d.value || d.close || d.price)),
+                            line: { color: '#2196F3', width: 2 }
+                        };
+                    } else {
+                        console.warn('No valid price data found, creating placeholder');
+                        candles = createDefaultCandlestickData(result);
+                    }
+                    
+                    // Process volume data
+                    const volumeData = result.chart_json.data.find(d => d.type === 'bar' && (d.name === 'Volume' || d.y.some(v => v > 1000)));
+                    
+                    if (volumeData && volumeData.y && volumeData.y.length > 0) {
+                        volume = volumeData;
+                        // Ensure volume doesn't use stacked format
+                        volume.marker = { 
+                            color: '#7986CB',
+                            opacity: 0.7 
+                        };
+                    } else if (result.volume && Array.isArray(result.volume)) {
+                        volume = {
+                            type: 'bar',
+                            name: 'Volume',
+                            x: result.volume.map(d => d.date || d.time),
+                            y: result.volume.map(d => parseFloat(d.value || d.volume)),
+                            marker: { 
+                                color: '#7986CB',
+                                opacity: 0.7 
+                            }
+                        };
+                    } else {
+                        console.warn('No volume data found, creating placeholder');
+                        volume = createDefaultVolumeData(result);
+                    }
                     
                     // Ensure proper subplot assignment
                     candles.yaxis = 'y';
@@ -211,46 +265,19 @@ document.addEventListener('DOMContentLoaded', function () {
                     volume.yaxis = 'y2';
                     volume.xaxis = 'x';
                     
-                    // Enhanced styling
-                    candles.increasing = { line: { color: '#26a69a' }, fillcolor: '#26a69a' };
-                    candles.decreasing = { line: { color: '#ef5350' }, fillcolor: '#ef5350' };
-                    volume.marker = { 
-                        color: volume.marker?.color || '#7986CB', 
-                        opacity: 0.7 
-                    };
-                    
-                    // Create signals trace if available
-                    let signals = [];
-                    if (result.signals && Array.isArray(result.signals)) {
-                        signals = [
-                            {
-                                type: 'scatter',
-                                x: result.signals.filter(s => s.action === 'buy').map(s => s.date),
-                                y: result.signals.filter(s => s.action === 'buy').map(s => s.price),
-                                mode: 'markers',
-                                name: 'Buy Signal',
-                                marker: { color: 'green', size: 10, symbol: 'triangle-up' },
-                                yaxis: 'y'
-                            },
-                            {
-                                type: 'scatter',
-                                x: result.signals.filter(s => s.action === 'sell').map(s => s.date),
-                                y: result.signals.filter(s => s.action === 'sell').map(s => s.price),
-                                mode: 'markers',
-                                name: 'Sell Signal',
-                                marker: { color: 'red', size: 10, symbol: 'triangle-down' },
-                                yaxis: 'y'
-                            }
-                        ];
+                    // Enhanced styling for candlesticks
+                    if (candles.type === 'candlestick') {
+                        candles.increasing = { line: { color: '#26a69a', width: 1 }, fillcolor: '#26a69a' };
+                        candles.decreasing = { line: { color: '#ef5350', width: 1 }, fillcolor: '#ef5350' };
                     }
                     
                     // Plot the chart with the combined data
-                    Plotly.newPlot('trading-chart', [candles, volume, ...signals], layout)
-                        .then(() => console.log('Price/Volume chart rendered'))
+                    Plotly.newPlot('trading-chart', [candles, volume], layout)
+                        .then(() => console.log('Price/Volume chart rendered successfully'))
                         .catch(err => console.error('Price/Volume error:', err));
                 } else {
-                    console.error('Invalid chart data structure');
-                    chartContainer.innerHTML = '<p class="text-white">Error: Invalid chart data structure</p>';
+                    console.error('Invalid or missing chart data structure');
+                    chartContainer.innerHTML = '<p class="text-white">Error: Invalid chart data structure. Check console for details.</p>';
                 }
 
                 // Update PNL chart
