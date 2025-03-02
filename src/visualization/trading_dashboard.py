@@ -166,6 +166,8 @@ class MarketDataVisualizer:
             total_days = (self.end_date - self.start_date).days
 
             logger.info(f"Creating chart for {self.ticker} with {len(df)} data points")
+
+            # Create candlestick trace for price
             candlestick = go.Candlestick(
                 x=df.index,
                 open=df['open'],
@@ -177,9 +179,9 @@ class MarketDataVisualizer:
                 decreasing_line_color='red'
             )
 
-            volume_colors = ['green' if (df['close'] > df['open']).iloc[i] else 'red' 
+            # Create volume trace with colors based on price direction
+            volume_colors = ['green' if (df['close'] > df['open']).iloc[i] else 'red'
                             for i in range(len(df))]
-            
             volume = go.Bar(
                 x=df.index,
                 y=df['volume'],
@@ -188,18 +190,49 @@ class MarketDataVisualizer:
                 opacity=0.6
             )
 
-            layout = go.Layout(
-                title=f'{self.ticker} Price and Volume from {self.start_date.date()} to {self.end_date.date()} ({self.bar_size}, {total_days} days)',
-                yaxis_title='Price',
-                xaxis_title='Date',
-                template='plotly_white',
-                yaxis=dict(domain=[0.3, 1.0]),
-                yaxis2=dict(title='Volume', domain=[0, 0.2], overlaying='y', side='right'),
-                height=800,
-                xaxis_rangeslider_visible=False
+            # Use make_subplots to create two vertically stacked subplots
+            from plotly.subplots import make_subplots
+            fig = make_subplots(
+                rows=2,  # Two rows: one for price, one for volume
+                cols=1,  # Single column
+                shared_xaxes=True,  # Share the x-axis (dates)
+                vertical_spacing=0.05,  # Space between subplots
+                subplot_titles=('', ''),  # No subplot titles needed
+                row_heights=[0.7, 0.3]  # Price subplot takes 70% height, volume 30%
             )
 
-            fig = go.Figure(data=[candlestick, volume], layout=layout)
+            # Add candlestick to the first subplot (row 1)
+            fig.add_trace(candlestick, row=1, col=1)
+
+            # Add volume to the second subplot (row 2)
+            fig.add_trace(volume, row=2, col=1)
+
+            # Update layout for the figure
+            fig.update_layout(
+                title=f'{self.ticker} Price and Volume from {self.start_date.date()} to {self.end_date.date()} ({self.bar_size}, {total_days} days)',
+                template='plotly_white',
+                height=800,
+                xaxis_rangeslider_visible=False,
+                showlegend=True,
+                # Update y-axis for the price subplot
+                yaxis1=dict(
+                    title='Price',
+                    side='left'
+                ),
+                # Update y-axis for the volume subplot
+                yaxis2=dict(
+                    title='Volume',
+                    side='left'
+                ),
+                # Ensure x-axis title is only on the bottom subplot
+                xaxis2=dict(
+                    title='Date'
+                )
+            )
+
+            # Remove x-axis title from the top subplot
+            fig.update_xaxes(title_text='', row=1, col=1)
+
             chart_json = pio.to_json(fig)
             logger.info(f"Chart JSON generated for {self.ticker}. Length: {len(chart_json)}")
             return json.loads(chart_json)
