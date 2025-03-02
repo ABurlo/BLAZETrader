@@ -2,31 +2,71 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Trading Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IBKR Trading Dashboard</title>
+    <!-- Include Plotly.js from CDN -->
+    <script src="https://cdn.plot.ly/plotly-2.34.0.min.js"></script>
+    <!-- Include jQuery for AJAX -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <style>
-        #chart-1 { height: 800px; width: 100%; }
+        #chart-1 { width: 100%; height: 800px; }
+        .error { color: red; text-align: center; }
     </style>
 </head>
 <body>
-    <h1>Interactive Trading Dashboard</h1>
-    <form method="POST" action="/generate_chart">
+    <h1>Interactive Brokers Trading Dashboard</h1>
+    
+    <!-- Form for user input -->
+    <form id="chart-form">
         <label for="ticker">Ticker:</label>
-        <input type="text" id="ticker" name="ticker" value="{{ ticker }}">
+        <input type="text" id="ticker" name="ticker" value="{{ ticker }}" required>
+        
         <label for="start_date">Start Date:</label>
-        <input type="date" id="start_date" name="start_date" value="{{ start_date }}">
+        <input type="date" id="start_date" name="start_date" value="{{ start_date }}" required>
+        
         <label for="end_date">End Date:</label>
-        <input type="date" id="end_date" name="end_date" value="{{ end_date }}">
-        <button type="submit">Generate Chart</button>
+        <input type="date" id="end_date" name="end_date" value="{{ end_date }}" required>
+        
+        <button type="submit">Update Chart</button>
     </form>
-    <div id="chart-container">{{ chart_html | safe }}</div>
+
+    <!-- Chart container -->
+    <div id="chart-1">{{ chart_html | safe }}</div>
+    <div id="error-message" class="error"></div>
+
+    <!-- JavaScript to handle form submission and chart update -->
     <script>
-        document.addEventListener("DOMContentLoaded", function() {
-            console.log("DOM loaded, checking chart");
-            if (!document.querySelector("#chart-1 .plotly")) {
-                console.error("Chart failed to render");
-            } else {
-                console.log("Chart rendered successfully");
-            }
+        $(document).ready(function() {
+            $('#chart-form').on('submit', function(event) {
+                event.preventDefault(); // Prevent default form submission
+
+                // Clear any previous error message
+                $('#error-message').text('');
+
+                // Get form data
+                var formData = $(this).serialize();
+
+                // Send AJAX request to generate chart
+                $.ajax({
+                    url: '/generate_chart',
+                    type: 'POST',
+                    data: formData,
+                    dataType: 'json',
+                    success: function(response) {
+                        if (response.error) {
+                            $('#error-message').text(response.error);
+                        } else {
+                            // Update the existing chart
+                            Plotly.newPlot('chart-1', response.data, response.layout);
+                        }
+                    },
+                    error: function(xhr, status, error) {
+                        console.log('AJAX Error:', status, error);
+                        console.log('Response:', xhr.responseText);
+                        $('#error-message').text('Failed to update chart. Check console for details.');
+                    }
+                });
+            });
         });
     </script>
 </body>
