@@ -4,68 +4,27 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Trading Dashboard</title>
-    <!-- Use a specific, recent version of Plotly.js -->
     <script src="https://cdn.plot.ly/plotly-2.34.0.min.js" onload="console.log('Plotly.js loaded')" onerror="console.error('Failed to load Plotly.js')"></script>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 0;
-            display: flex;
-            height: 100vh;
-        }
-        .sidebar {
-            width: 250px;
-            background-color: #f0f0f0;
-            padding: 20px;
-            box-shadow: 2px 0 5px rgba(0,0,0,0.1);
-        }
-        .sidebar h1 {
-            font-size: 24px;
-            margin-bottom: 20px;
-        }
-        .sidebar label {
-            display: block;
-            margin-bottom: 5px;
-            font-weight: bold;
-        }
-        .sidebar input {
-            width: 100%;
-            padding: 8px;
-            margin-bottom: 15px;
-            border: 1px solid #ccc;
-            border-radius: 4px;
-        }
-        .sidebar button {
-            width: 100%;
-            padding: 10px;
-            background-color: #28a745;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-        .sidebar button:hover {
-            background-color: #218838;
-        }
-        .chart-container {
-            flex: 1;
-            padding: 20px;
-            overflow: auto;
-        }
-    </style>
+    <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <div class="sidebar">
+    <header>
         <h1>Trading Dashboard</h1>
+        <nav>
+            <a href="index.html">Home</a>
+            <a href="plugins.html">Plugins</a>
+            <a href="admin.html">Admin</a>
+        </nav>
+    </header>
+    <div class="sidebar">
         <form id="chart-form">
             <label for="ticker">Ticker Symbol:</label>
-            <input type="text" id="ticker" name="ticker" value="{{ ticker }}" required>
+            <input type="text" id="ticker" name="ticker" value="{{ ticker }}" placeholder="e.g., AAPL" required>
 
-            <label for="start_date">Start Date (YYYY-MM-DD):</label>
+            <label for="start_date">Start Date:</label>
             <input type="date" id="start_date" name="start_date" value="{{ start_date }}" required>
 
-            <label for="end_date">End Date (YYYY-MM-DD):</label>
+            <label for="end_date">End Date:</label>
             <input type="date" id="end_date" name="end_date" value="{{ end_date }}" required>
 
             <button type="submit">Run</button>
@@ -74,7 +33,11 @@
     <div class="chart-container" id="chart-container">
         <!-- Chart will be injected here -->
     </div>
+    <footer>
+        <p>© 2025 BLAZETrader</p>
+    </footer>
 
+    <!-- Your existing <script> block remains unchanged -->
     <script>
         async function waitForPlotly() {
             return new Promise((resolve, reject) => {
@@ -120,7 +83,6 @@
                 console.log('Chart HTML snippet:', chartHtml.substring(0, 500));
                 chartContainer.innerHTML = chartHtml;
 
-                // Verify rendering
                 if (!document.querySelector('.plotly')) {
                     throw new Error('Chart did not render (Plotly may not have initialized)');
                 }
