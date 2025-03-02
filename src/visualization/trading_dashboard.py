@@ -1,11 +1,21 @@
+import os
 from ib_insync import IB, Stock, util
 import pandas as pd
 import plotly.graph_objects as go
 import datetime
 from quart import Quart, render_template, request, Response
 
-app = Quart(__name__)
-app.static_folder = 'static'
+# Use an absolute path for the static folder
+app = Quart(__name__, static_url_path='/static')
+app.static_folder = os.path.abspath(os.path.join(os.path.dirname(__file__), 'static'))
+
+# Debug: Verify the static file exists
+plotly_js_path = os.path.join(app.static_folder, 'plotly-2.32.0.min.js')
+print(f"Checking for Plotly.js at: {plotly_js_path}")
+if not os.path.exists(plotly_js_path):
+    print(f"Error: Plotly.js file not found at {plotly_js_path}")
+else:
+    print("Plotly.js file found successfully")
 
 class MarketDataVisualizer:
     def __init__(self, ticker, start_date, end_date):
@@ -109,8 +119,7 @@ class MarketDataVisualizer:
             fig = go.Figure(data=[candlestick, volume], layout=layout)
             chart_html = fig.to_html(full_html=False)
             print(f"Chart HTML generated. Length: {len(chart_html)}")
-            # Debug: Log a snippet of the chart HTML
-            print(f"Chart HTML snippet: {chart_html[:200]}...")
+            print(f"Chart HTML snippet: {chart_html[:500]}...")
             return chart_html
 
         except Exception as e:

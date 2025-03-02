@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Trading Dashboard</title>
-    <!-- Load Plotly.js locally -->
-    <script src="/static/plotly-2.32.0.min.js"></script>
+    <!-- Load Plotly.js locally with the correct URL -->
+    <script src="https://cdn.plot.ly/plotly-3.0.1.js" onload="console.log('Plotly.js script tag loaded')" onerror="console.error('Failed to load Plotly.js')"></script>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -86,9 +86,11 @@
                     attempts++;
                     if (typeof Plotly !== 'undefined') {
                         clearInterval(checkPlotly);
+                        console.log('Plotly.js initialized successfully');
                         resolve();
                     } else if (attempts >= maxAttempts) {
                         clearInterval(checkPlotly);
+                        console.error('Plotly.js failed to initialize after 5 seconds');
                         reject(new Error('Plotly.js failed to load after 5 seconds'));
                     }
                 }, 100);
@@ -114,7 +116,6 @@
                 // Ensure Plotly.js is loaded
                 console.log('Waiting for Plotly.js to load...');
                 await waitForPlotly();
-                console.log('Plotly.js loaded successfully');
 
                 // Send POST request to /generate_chart
                 console.log('Sending request to /generate_chart...');
