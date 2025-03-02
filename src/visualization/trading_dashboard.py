@@ -446,10 +446,10 @@ async def portfolio():
                 df = await visualizer.fetch_historical_data()
                 current_price = df['close'].iloc[-1] if not df.empty else await fetch_current_price(ticker)
                 if current_price <= 0:
-                    return jsonify({'error': f'Failed to fetch current price for {ticker}'}), 500
+                    return jsonify({'error': f'Failed to fetch current price for {ticker}', 'portfolio': portfolio, 'total_value': demo_balance + sum(data['value'] for data in portfolio.values() if 'value' in data), 'total_change': calculate_total_change(portfolio), 'demo_balance': demo_balance}), 500
             except Exception as e:
                 logger.error(f"Error fetching price for {ticker}: {str(e)}")
-                return jsonify({'error': f'Error fetching price for {ticker}: {str(e)}'}), 500
+                return jsonify({'error': f'Error fetching price for {ticker}: {str(e)}', 'portfolio': portfolio, 'total_value': demo_balance + sum(data['value'] for data in portfolio.values() if 'value' in data), 'total_change': calculate_total_change(portfolio), 'demo_balance': demo_balance}), 500
 
             trade_value = current_price * shares
 
@@ -469,11 +469,11 @@ async def portfolio():
                     portfolio[ticker]['price'] = current_price
                     demo_balance -= trade_value
                 else:
-                    return jsonify({'error': 'Insufficient funds'}), 400
+                    return jsonify({'error': 'Insufficient funds', 'portfolio': portfolio, 'total_value': demo_balance + sum(data['value'] for data in portfolio.values() if 'value' in data), 'total_change': calculate_total_change(portfolio), 'demo_balance': demo_balance}), 400
 
             elif action == 'sell':
                 if ticker not in portfolio or portfolio[ticker]['shares'] < shares:
-                    return jsonify({'error': 'Insufficient shares or ticker not in portfolio'}), 400
+                    return jsonify({'error': f'You cannot sell {shares} shares of {ticker} - you only have {portfolio[ticker]["shares"] if ticker in portfolio else 0} shares', 'portfolio': portfolio, 'total_value': demo_balance + sum(data['value'] for data in portfolio.values() if 'value' in data), 'total_change': calculate_total_change(portfolio), 'demo_balance': demo_balance}), 400
                 portfolio[ticker]['shares'] -= shares
                 portfolio[ticker]['value'] = max(0, portfolio[ticker]['shares'] * current_price)  # Ensure value doesn’t go negative
                 portfolio[ticker]['price'] = current_price
@@ -487,7 +487,7 @@ async def portfolio():
                 current_price = float(form.get('current_price', 0))
                 cost_basis = float(form.get('cost_basis', 0))
                 if current_price <= 0 or cost_basis <= 0:
-                    return jsonify({'error': 'Current price and cost basis must be positive'}), 400
+                    return jsonify({'error': 'Current price and cost basis must be positive', 'portfolio': portfolio, 'total_value': demo_balance + sum(data['value'] for data in portfolio.values() if 'value' in data), 'total_change': calculate_total_change(portfolio), 'demo_balance': demo_balance}), 400
 
                 value = shares * current_price
                 change = ((current_price - cost_basis) / cost_basis) * 100 if cost_basis != 0 else 0.0
@@ -508,7 +508,7 @@ async def portfolio():
         session['demo_balance'] = demo_balance
         session.modified = True  # Ensure session is marked as modified
 
-        # Return updated portfolio data for AJAX updates
+        # Return updated portfolio data for AJAX updates, even on errors
         logger.info(f"Portfolio updated: {json.dumps({'portfolio': portfolio, 'demo_balance': demo_balance, 'total_value': demo_balance + sum(data['value'] for data in portfolio.values() if 'value' in data), 'total_change': calculate_total_change(portfolio)})}")
         return jsonify({
             'portfolio': portfolio,

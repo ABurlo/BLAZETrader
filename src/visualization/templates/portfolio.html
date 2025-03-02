@@ -61,7 +61,7 @@
         </table>
         <p class="text-white"><strong>Total Value:</strong> ${{ total_value|float|round(2) }}</p>
         <p class="text-white"><strong>Total Change:</strong> {% if total_change is number %}{{ "{:+.2f}%".format(total_change) }}{% else %}{{ total_change }}{% endif %}</p>
-        <p class="text-white"><strong>Demo Balance:</strong> ${{ demo_balance|float|round(2) }}</p>
+        <p class="text-white"> <strong>Demo Balance:</strong> ${{ demo_balance|float|round(2) }}</p>
     </div>
 </div>
 
@@ -130,18 +130,22 @@
                 try {
                     const response = await fetch('/portfolio', {
                         method: 'POST',
-                        body: formData
+                        body: formData,
+                        headers: {
+                            'Accept': 'application/json'
+                        }
                     })
                     const data = await response.json()
 
+                    // Handle both success (200) and error (400) responses
                     if (!response.ok) {
-                        alert(`Error: ${data.error || 'Failed to process request'}`)
+                        alert(data.error || 'An error occurred while processing your request.')
                         console.error('Server error:', data)
-                        return
+                    } else {
+                        alert('Action completed successfully!')
                     }
 
-                    alert('Action completed successfully!')
-                    // Update the first .card-body (original holdings table) only
+                    // Update the portfolio display regardless of success or error
                     const cardBody = document.querySelector('#portfolio-card .card-body')
                     if (cardBody) {
                         cardBody.innerHTML = `
