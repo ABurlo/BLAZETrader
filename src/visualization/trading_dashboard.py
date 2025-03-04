@@ -36,15 +36,25 @@ BAR_SIZE_MULTIPLIERS = {
 
 class MarketDataVisualizer:
     def __init__(self, ticker, start_date=None, end_date=None, bar_size='1 day'):
-        """Initialize the MarketDataVisualizer with ticker and date range."""
         self.ticker = ticker.upper()
         eastern = timezone('US/Eastern')
-        self.end_date = eastern.localize(datetime.datetime.now()) if not end_date else eastern.localize(datetime.datetime.strptime(end_date, "%Y-%m-%d"))
-        self.start_date = self.end_date - datetime.timedelta(days=365) if not start_date else eastern.localize(datetime.datetime.strptime(start_date, "%Y-%m-%d"))
+        self.end_date = pd.Timestamp(end_date).tz_localize('UTC').tz_convert(eastern) if end_date else pd.Timestamp.now(tz=eastern)
+        self.start_date = pd.Timestamp(start_date).tz_localize('UTC').tz_convert(eastern) if start_date else self.end_date - pd.Timedelta(days=365)
         self.bar_size = bar_size
         self.ib = None
         self.df = None
         self.backtest_results = None
+
+
+    async def connect_to_ib(self):
+        """Establish connection to Interactive Brokers TWS."""
+        self.ib = IB()
+        try:
+            await self.ib.connectAsync('127.0.0.1', 7497, clientId=10)
+            logger.info("Connected to Interactive Brokers TWS")
+        except Exception as e:
+            logger.error(f"Connection error: {e}")
+            raise ConnectionError(f"Failed to connect to IBKR: {e}")
 
     async def connect_to_ib(self):
         """Establish connection to Interactive Brokers TWS."""
@@ -58,14 +68,15 @@ class MarketDataVisualizer:
             raise ConnectionError(f"Failed to connect to IBKR: {e}")
 
     async def fetch_historical_data(self):
-        """Fetch historical market data from Interactive Brokers."""
         try:
             if not self.ib or not self.ib.isConnected():
                 await self.connect_to_ib()
 
             logger.info(f"Fetching data for {self.ticker} from {self.start_date} to {self.end_date} with bar size {self.bar_size}")
             contract = Stock(self.ticker, 'SMART', 'USD')
-            duration_str = self._get_duration_string()
+            duration_str = SUPPORTED_DURATION_STRINGS.get(self.bar_size, '1 Y')
+            
+            # Use the timezone-aware end_date directly
             bars = await self.ib.reqHistoricalDataAsync(
                 contract, endDateTime=self.end_date, durationStr=duration_str,
                 barSizeSetting=self.bar_size, whatToShow='TRADES', useRTH=True
@@ -73,7 +84,21 @@ class MarketDataVisualizer:
             if not bars:
                 raise ValueError(f"No data received for {self.ticker}")
 
-            self.df = self._process_historical_data(bars)
+            self.df = util.df(bars)
+            self.df.set_index('date', inplace=True)
+            self.df.index = pd.to_datetime(self.df.index, utc=True).tz_convert('US/Eastern')
+            # Convert columns to float
+            self.df['open'] = self.df['open'].astype(float)
+            self.df['high'] = self.df['high'].astype(float)
+            self.df['low'] = self.df['low'].astype(float)
+            self.df['close'] = self.df['close'].astype(float)
+            self.df['volume'] = self.df['volume'].astype(float)
+
+            # Check for and handle missing values
+            if self.df.isnull().any().any():
+                logger.warning("Data contains missing values. Dropping rows with NaNs.")
+            self.df.dropna(inplace=True)
+            
             logger.info(f"Data fetched successfully. Rows: {len(self.df)}, Columns: {self.df.columns.tolist()}")
             return self.df
 
@@ -84,6 +109,7 @@ class MarketDataVisualizer:
             if self.ib and self.ib.isConnected():
                 logger.info("Disconnecting from IBKR")
                 self.ib.disconnect()
+
 
     def _get_duration_string(self):
         """Calculate appropriate duration string based on bar size and date range."""
@@ -100,15 +126,37 @@ class MarketDataVisualizer:
     def _process_historical_data(self, bars):
         """Process raw bar data into a cleaned DataFrame."""
         df = util.df(bars)
+
+        # Ensure required columns are present
         required_columns = ['date', 'open', 'high', 'low', 'close', 'volume']
         if not all(col in df.columns for col in required_columns):
             raise ValueError(f"Missing required columns: {df.columns.tolist()}")
-        
+
+        # Set index and clean data
         df.set_index('date', inplace=True)
-        df.index = pd.to_datetime(df.index).tz_localize('US/Eastern', ambiguous='infer', nonexistent='shift_forward')
+
+        # Convert index to DatetimeIndex if it's not already
+        if not isinstance(df.index, pd.DatetimeIndex):
+            try:
+                df.index = pd.to_datetime(df.index)
+            except Exception as e:
+                raise ValueError(f"Error converting index to datetime: {e}")
+
+        # Handle timezone
+        if df.index.tzinfo is None:
+            df.index = df.index.tz_localize('US/Eastern', ambiguous='infer', nonexistent='shift_forward')
+        else:
+            df.index = df.index.tz_convert('US/Eastern')
+
+        # Replace invalid values and drop NaNs
         df.replace([np.inf, -np.inf], np.nan, inplace=True)
         df.dropna(subset=['close', 'open', 'high', 'low', 'volume'], inplace=True)
+
+        if df.empty:
+            raise ValueError("Processed DataFrame is empty after cleaning.")
+
         return df
+
 
     def generate_ema_signals(self):
         """Generate trading signals based on EMA crossovers."""
@@ -127,6 +175,16 @@ class MarketDataVisualizer:
         sell_condition = (self.df['ema_9'] < self.df['ema_20']) & (self.df['prev_ema_9'] >= self.df['prev_ema_20']) & (self.df['close'] < self.df['ema_200'])
         self.df.loc[buy_condition, 'signal'] = 1
         self.df.loc[sell_condition, 'signal'] = -1
+
+    def _finalize_backtest_results(self, demo_balance, trades):
+        """Finalize backtest results and calculate metrics."""
+        self.backtest_results = {
+            'trade_log': trades,
+            'pnl_df': self.df[['balance', 'shares', 'value']],
+        }
+        metrics = self.calculate_metrics(demo_balance)
+        self.backtest_results.update(metrics)
+
 
     def calculate_pnl_and_trades(self, demo_balance=10000):
         """Calculate PNL and trade log based on signals."""
@@ -217,27 +275,34 @@ class MarketDataVisualizer:
         })
         return trades, current_balance
 
-    def _finalize_backtest_results(self, demo_balance, trades):
-        """Calculate final backtest metrics including Sortino ratio."""
-        self.df['pnl_percent'] = self.df['balance'].pct_change().replace([np.inf, -np.inf], np.nan) * 100
-        daily_returns = self.df['balance'].pct_change().replace([np.inf, -np.inf], np.nan).dropna()
-        total_return = ((self.df['balance'].iloc[-1] - demo_balance) / demo_balance) * 100 if np.isfinite(self.df['balance'].iloc[-1]) else 0.0
-        cumulative_max = self.df['balance'].cummax()
-        drawdowns = (cumulative_max - self.df['balance']) / (demo_balance + cumulative_max)
-        max_drawdown = drawdowns.max() * 100 if not drawdowns.empty else 0.0
-        sharpe_ratio = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252) if daily_returns.std() != 0 else 0.0
-        downside_returns = daily_returns[daily_returns < 0]
-        sortino_ratio = (daily_returns.mean() / downside_returns.std()) * np.sqrt(252) if downside_returns.std() != 0 else 0.0
+    def calculate_metrics(self, demo_balance):
+        """Calculate backtest metrics including Sortino Ratio."""
+        try:
+            daily_returns = self.df['balance'].pct_change().dropna()
+            total_return = ((self.df['balance'].iloc[-1] - demo_balance) / demo_balance) * 100
+            cumulative_max = self.df['balance'].cummax()
+            drawdowns = (cumulative_max - self.df['balance']) / cumulative_max
+            max_drawdown = drawdowns.max() * 100 if not drawdowns.empty else 0.0
+            sharpe_ratio = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252) if daily_returns.std() != 0 else 0.0
+            downside_returns = daily_returns[daily_returns < 0]
+            sortino_ratio = (daily_returns.mean() / downside_returns.std()) * np.sqrt(252) if downside_returns.std() != 0 else 0.0
 
-        self.backtest_results = {
-            'pnl_df': self.df[['pnl_percent', 'balance', 'shares', 'value']].copy().fillna(0.0),
-            'trade_log': trades,
-            'total_return': total_return,
-            'max_drawdown': max_drawdown,
-            'sharpe_ratio': sharpe_ratio,
-            'sortino_ratio': sortino_ratio,
-            'final_balance': self.df['balance'].iloc[-1]
-        }
+            return {
+                'total_return': total_return,
+                'max_drawdown': max_drawdown,
+                'sharpe_ratio': sharpe_ratio,
+                'sortino_ratio': sortino_ratio,
+                'final_balance': self.df['balance'].iloc[-1]
+            }
+        except Exception as e:
+            logger.error(f"Error calculating metrics: {e}")
+            return {
+                'total_return': 0.0,
+                'max_drawdown': 0.0,
+                'sharpe_ratio': 0.0,
+                'sortino_ratio': 0.0,
+                'final_balance': demo_balance
+            }
 
     async def create_interactive_chart(self, demo_balance=10000):
         """Generate an interactive chart with backtest results."""
@@ -246,19 +311,31 @@ class MarketDataVisualizer:
             if df is None or df.empty:
                 return {'error': f"No data available for {self.ticker}"}
 
-            df = df[(df.index >= self.start_date) & (df.index <= self.end_date)]
+            # Ensure the index is a DatetimeIndex
+            if not isinstance(df.index, pd.DatetimeIndex):
+                df.index = pd.to_datetime(df.index)
+
+            start_date = pd.Timestamp(self.start_date).tz_localize(None)
+            end_date = pd.Timestamp(self.end_date).tz_localize(None)
+
+            df.index = df.index.tz_localize(None)
+            df = df[(df.index >= start_date) & (df.index <= end_date)]
             if df.empty:
                 return {'error': f"No data within the specified range for {self.ticker}"}
 
             total_days = (self.end_date - self.start_date).days
             self.df = df
+
+            # Generate signals and calculate PNL/trades
             self.generate_ema_signals()
             self.calculate_pnl_and_trades(demo_balance)
+
             if not self.backtest_results:
                 return {'error': 'Backtest calculation failed'}
 
-            fig = self._create_plotly_figure(df, total_days)
+            fig = self._create_plotly_figure(df)
             chart_json = pio.to_json(fig)
+
             return {
                 'chart_json': json.loads(chart_json),
                 'pnl_data': self._get_pnl_data(),
@@ -276,39 +353,77 @@ class MarketDataVisualizer:
             logger.error(f"Error in create_interactive_chart: {str(e)}")
             return {'error': f"Error generating chart: {str(e)}"}
 
-    def _create_plotly_figure(self, df, total_days):
-        """Create the Plotly figure with candlestick and volume subplots."""
-        candle_colors = ['green' if row['close'] > row['open'] else 'red' for _, row in df.iterrows()]
-        candlestick = go.Candlestick(
-            x=df.index, open=df['open'].astype(float), high=df['high'].astype(float),
-            low=df['low'].astype(float), close=df['close'].astype(float),
-            increasing_line_color='green', decreasing_line_color='red',
-            increasing_fillcolor='green', decreasing_fillcolor='red',
-            line_width=1, name='Price'
-        )
-        volume_colors = ['green' if row['close'] > row['open'] else 'red' for _, row in df.iterrows()]
-        volume = go.Bar(x=df.index, y=df['volume'].astype(float), name='Volume', marker_color=volume_colors, opacity=0.6, showlegend=True)
+    def _create_plotly_figure(self, df):
+        """Create a Plotly figure with candlestick and volume subplots."""
+        if df.empty:
+            raise ValueError("Dataframe is empty. Cannot create chart.")
 
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.05, row_heights=[0.75, 0.25], specs=[[{"secondary_y": False}], [{"secondary_y": False}]])
+        logger.info(f"Creating chart with data: {df.head()}")
+
+        # Create candlestick trace
+        candlestick = go.Candlestick(
+            x=df.index,
+            open=df['open'].astype(float),
+            high=df['high'].astype(float),
+            low=df['low'].astype(float),
+            close=df['close'].astype(float),
+            increasing_line_color='green',
+            decreasing_line_color='red',
+            name='Price'
+        )
+
+        # Create volume bar trace
+        volume = go.Bar(
+            x=df.index,
+            y=df['volume'].astype(float),
+            name='Volume',
+            marker_color=['green' if row['close'] > row['open'] else 'red' for _, row in df.iterrows()],
+        )
+
+        # Create subplots
+        fig = make_subplots(
+            rows=2,
+            cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.02,
+            row_heights=[0.75, 0.25]
+        )
+
         fig.add_trace(candlestick, row=1, col=1)
         fig.add_trace(volume, row=2, col=1)
+
         fig.update_layout(
-            title=f'{self.ticker} Backtest ({self.bar_size}, {total_days} days)', template='plotly_dark', height=600, width=800,
-            xaxis_rangeslider_visible=False, showlegend=True,
-            yaxis1=dict(title='Price ($)', showgrid=True, gridcolor='rgba(255, 255, 255, 0.1)', zerolinecolor='rgba(255, 255, 255, 0.1)', tickformat='.2f'),
-            yaxis2=dict(title='Volume', showgrid=True, gridcolor='rgba(255, 255, 255, 0.1)', zerolinecolor='rgba(255, 255, 255, 0.1)'),
-            xaxis2=dict(title='Date', showgrid=True, gridcolor='rgba(255, 255, 255, 0.1)', type='date'),
-            plot_bgcolor='rgba(0, 0, 0, 0)', paper_bgcolor='#2d2d2d', margin=dict(l=50, r=50, t=80, b=50)
+            title=f"{self.ticker} Price and Volume Chart",
+            template="plotly_dark",
+            height=600,
+            width=800,
+            xaxis_rangeslider_visible=False,
+            yaxis=dict(title="Price ($)"),
+            yaxis2=dict(title="Volume"),
         )
+
+        logger.info("Chart created successfully.")
+        
         return fig
+
 
     def _get_pnl_data(self):
         """Prepare PNL data for charting."""
+        if 'balance' not in self.backtest_results['pnl_df'].columns:
+            return None
+        
+        pnl_df = self.backtest_results['pnl_df'].copy()
+        pnl_df['pnl_percent'] = (pnl_df['balance'].pct_change() * 100).fillna(0)
+        
         return {
-            'x': self.backtest_results['pnl_df'].index.tolist(),
-            'y': self.backtest_results['pnl_df']['pnl_percent'].fillna(0.0).tolist(),
-            'type': 'bar', 'name': 'PNL %',
-            'marker': {'color': ['green' if x > 0 else 'red' for x in self.backtest_results['pnl_df']['pnl_percent'].fillna(0.0)], 'opacity': 0.8}
+            'x': pnl_df.index.tolist(),
+            'y': pnl_df['pnl_percent'].tolist(),
+            'type': 'bar',
+            'name': 'PNL %',
+            'marker': {
+                'color': ['green' if x > 0 else 'red' for x in pnl_df['pnl_percent']],
+                'opacity': 0.8
+            }
         }
 
 # Routes
