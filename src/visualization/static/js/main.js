@@ -1,30 +1,33 @@
 document.addEventListener('DOMContentLoaded', function () {
-    const chartForm = document.getElementById('chartForm');
-    if (chartForm) {
-        chartForm.addEventListener('submit', async function (e) {
+    const tradingForm = document.getElementById('trading-form');
+    if (tradingForm) {
+        tradingForm.addEventListener('submit', async function (e) {
             e.preventDefault();
-            const formData = new FormData(chartForm);
+            const formData = new FormData(tradingForm);
 
             try {
-                const response = await fetch(chartForm.action, {
+                const chartContainer = document.getElementById('trading-chart');
+                chartContainer.innerHTML = '<p class="text-white">Loading chart...</p>';
+
+                // Fetch backtest results
+                const response = await fetch('/backtest', {
                     method: 'POST',
                     body: formData
                 });
-                const data = await response.json();
+                const result = await response.json();
 
-                if (data.error) {
-                    alert(data.error);
-                    return;
+                if (!response.ok) {
+                    throw new Error(result.error || 'Failed to run backtest');
                 }
 
                 // Validate received data
-                if (!data.chart_json || !data.chart_json.data || !data.chart_json.layout) {
-                    console.error('Invalid chart JSON:', data);
-                    return;
+                if (!result.chart_json || !result.chart_json.data || !result.chart_json.layout) {
+                    console.error('Invalid chart JSON:', result);
+                    throw new Error('Invalid chart data received.');
                 }
 
-                // Render chart
-                Plotly.newPlot('chart-1', data.chart_json.data, data.chart_json.layout)
+                // Render price and volume chart
+                Plotly.newPlot('trading-chart', result.chart_json.data, result.chart_json.layout)
                     .then(() => console.log('Chart rendered successfully'))
                     .catch(err => console.error('Error rendering chart:', err));
             } catch (error) {

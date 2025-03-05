@@ -360,13 +360,20 @@ class MarketDataVisualizer:
 
         logger.info(f"Creating chart with data: {df.head()}")
 
+        # Ensure only required columns are used
+        df = df[['open', 'high', 'low', 'close', 'volume']]
+
+        # Ensure no missing values in required columns
+        if df.isnull().any().any():
+            raise ValueError("Data contains missing values in required columns.")
+
         # Create candlestick trace
         candlestick = go.Candlestick(
             x=df.index,
-            open=df['open'].astype(float),
-            high=df['high'].astype(float),
-            low=df['low'].astype(float),
-            close=df['close'].astype(float),
+            open=df['open'],
+            high=df['high'],
+            low=df['low'],
+            close=df['close'],
             increasing_line_color='green',
             decreasing_line_color='red',
             name='Price'
@@ -375,9 +382,10 @@ class MarketDataVisualizer:
         # Create volume bar trace
         volume = go.Bar(
             x=df.index,
-            y=df['volume'].astype(float),
+            y=df['volume'],
             name='Volume',
             marker_color=['green' if row['close'] > row['open'] else 'red' for _, row in df.iterrows()],
+            width=0.8  # Adjust bar width
         )
 
         # Create subplots
@@ -405,7 +413,6 @@ class MarketDataVisualizer:
         logger.info("Chart created successfully.")
         
         return fig
-
 
     def _get_pnl_data(self):
         """Prepare PNL data for charting."""
