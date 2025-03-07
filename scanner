@@ -1,0 +1,505 @@
+import os
+import pickle
+from datetime import datetime, timedelta
+import asyncio
+import nest_asyncio
+from pytz import UTC
+import logging
+from ib_insync import IB, Stock, util
+import pandas as pd
+import numpy as np
+from typing import Optional, List, Dict, Tuple, Any
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+nest_asyncio.apply()
+
+class DataCache:
+    """Handles caching of historical market data to reduce API calls."""
+    
+    def __init__(self, cache_dir: str = './cache'):
+        self.cache_dir = cache_dir
+        os.makedirs(cache_dir, exist_ok=True)
+
+    def get_cache_path(self, symbol: str, timeframe: str) -> str:
+        return os.path.join(self.cache_dir, f'{symbol}_{timeframe}.pickle')
+
+    def is_cached(self, symbol: str, timeframe: str) -> bool:
+        cache_path = self.get_cache_path(symbol, timeframe)
+        return os.path.exists(cache_path)
+
+    def load_cache(self, symbol: str, timeframe: str) -> pd.DataFrame:
+        try:
+            with open(self.get_cache_path(symbol, timeframe), 'rb') as f:
+                return pickle.load(f)
+        except Exception as e:
+            logger.error(f"Error loading cache for {symbol}_{timeframe}: {e}")
+            return pd.DataFrame()
+
+    def save_cache(self, symbol: str, timeframe: str, data: pd.DataFrame) -> None:
+        try:
+            with open(self.get_cache_path(symbol, timeframe), 'wb') as f:
+                pickle.dump(data, f)
+        except Exception as e:
+            logger.error(f"Error saving cache for {symbol}_{timeframe}: {e}")
+
+
+class MarketScanner:
+    """Scans the market for trading setups based on fair value gaps (FVG)."""
+    
+    def __init__(self, host: str = '127.0.0.1', port: int = 7497, client_id: int = 1):
+        self.ib = IB()
+        self.host = host
+        self.port = port
+        self.client_id = client_id
+        self.fee_per_share = 0.0035
+        self.max_slippage_percent = 0.02
+        self.cache = DataCache()
+        self._connected = False
+
+    async def connect(self, retries: int = 3) -> bool:
+        """Connect to Interactive Brokers TWS or Gateway."""
+        for attempt in range(retries):
+            try:
+                if not self.ib.isConnected():
+                    await self.ib.connectAsync(self.host, self.port, clientId=self.client_id)
+                    self._connected = True
+                    logger.info(f"Connected to Interactive Brokers at {self.host}:{self.port}")
+                    return True
+                else:
+                    self._connected = True
+                    logger.info("Already connected to Interactive Brokers")
+                    return True
+            except Exception as e:
+                logger.error(f"Connection attempt {attempt + 1} failed: {e}")
+                if attempt < retries - 1:
+                    await asyncio.sleep(2)
+        
+        logger.error("Failed to connect after retries")
+        self._connected = False
+        return False
+
+    def disconnect(self) -> None:
+        """Disconnect from Interactive Brokers TWS or Gateway."""
+        try:
+            if self.ib.isConnected():
+                self.ib.disconnect()
+                logger.info("Disconnected from Interactive Brokers")
+            self._connected = False
+        except Exception as e:
+            logger.error(f"Disconnect failed: {e}")
+            self._connected = False
+
+    async def get_historical_data(self, symbol: str, end_date: datetime, 
+                                 duration: str, bar_size: str) -> Optional[pd.DataFrame]:
+        """Fetch historical data for a symbol with technical indicators."""
+        # Check cache first
+        if self.cache.is_cached(symbol, bar_size):
+            df = self.cache.load_cache(symbol, bar_size)
+            if not df.empty:
+                return df
+
+        try:
+            contract = Stock(symbol, 'SMART', 'USD')
+            
+            # Ensure duration is in the correct format: integer{SPACE}unit
+            if duration[0].isdigit() and ' ' not in duration:
+                # Find the position where digits end
+                for i, char in enumerate(duration):
+                    if not char.isdigit():
+                        # Insert a space between number and unit
+                        duration = duration[:i] + ' ' + duration[i:]
+                        break
+            
+            bars = await self.ib.reqHistoricalDataAsync(
+                contract, end_date, duration, bar_size, 'TRADES', useRTH=True
+            )
+            
+            if not bars:
+                logger.warning(f"No historical data available for {symbol}")
+                return None
+
+            # Convert to DataFrame and process
+            df = util.df(bars)
+            df['date'] = pd.to_datetime(df['date'], utc=True, errors='coerce')
+            
+            if df['date'].isna().any():
+                logger.error(f"Date parsing failed for {symbol}")
+                return None
+                
+            df.set_index('date', inplace=True)
+            
+            # Calculate ATR
+            df['atr'] = self._calculate_atr(df)
+            
+            # Add additional indicators for daily timeframe
+            if bar_size == '1 day':
+                self._add_daily_indicators(df)
+
+            # Cache the data
+            self.cache.save_cache(symbol, bar_size, df)
+            return df
+            
+        except Exception as e:
+            logger.error(f"Failed to fetch historical data for {symbol}: {e}")
+            return None
+
+    def _calculate_atr(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
+        """Calculate Average True Range."""
+        # Calculate true range components
+        high_low = df['high'] - df['low']
+        high_close_prev = abs(df['high'] - df['close'].shift(1))
+        low_close_prev = abs(df['low'] - df['close'].shift(1))
+        
+        # Combine components to get true range
+        # Use pandas max method instead of numpy.maximum.reduce
+        true_range = pd.DataFrame({
+            'hl': high_low,
+            'hcp': high_close_prev,
+            'lcp': low_close_prev
+        }).max(axis=1)
+        
+        # Apply rolling mean to the pandas Series
+        return true_range.rolling(window=period, min_periods=1).mean()
+
+    def _add_daily_indicators(self, df: pd.DataFrame) -> None:
+        """Add technical indicators to daily data."""
+        # Simple Moving Average and its slope
+        df['sma_20'] = df['close'].rolling(window=20, min_periods=1).mean()
+        df['sma_slope'] = df['sma_20'].diff()
+        
+        # Directional Movement Index components
+        df['plus_di'] = 100 * (df['high'].diff().clip(lower=0) / df['atr']).rolling(14, min_periods=1).mean()
+        df['minus_di'] = 100 * ((-df['low'].diff().clip(upper=0)) / df['atr']).rolling(14, min_periods=1).mean()
+        
+        # Average Directional Index
+        df['adx'] = 100 * abs(df['plus_di'] - df['minus_di']) / (df['plus_di'] + df['minus_di']).replace(0, np.nan).rolling(14, min_periods=1).mean()
+        
+        # Bollinger Band Width
+        std_20 = df['close'].rolling(20, min_periods=1).std()
+        df['bb_width'] = (df['sma_20'] + 2 * std_20 - (df['sma_20'] - 2 * std_20)) / df['sma_20']
+
+    async def get_5min_data(self, symbol: str, start_time: datetime, end_date: datetime) -> Optional[pd.DataFrame]:
+        """Get 5-minute bar data for a symbol."""
+        if self.cache.is_cached(symbol, '5min'):
+            df = self.cache.load_cache(symbol, '5min')
+            if not df.empty and any(df.index >= start_time):
+                return df[df.index >= start_time]
+
+        # Use a standard duration format instead of bars
+        # Calculate days between dates and add some buffer
+        days_diff = (end_date - start_time).days + 1
+        duration = f"{max(days_diff, 7)} D"  # At least 7 days
+        
+        df = await self.get_historical_data(symbol, end_date, duration, '5 mins')
+        return df[df.index >= start_time] if df is not None and not df.empty else None
+
+
+    def find_fvg(self, df: pd.DataFrame, current_index: int) -> List[Tuple[Any, float, float]]:
+        """Find Fair Value Gaps in the data."""
+        fvgs = []
+        for i in range(2, current_index + 1):
+            # Bullish FVG: Current candle's low is higher than previous-1 candle's high
+            if (df['close'].iloc[i-1] > df['open'].iloc[i-1] and  # Previous candle is bullish
+                df['low'].iloc[i] > df['high'].iloc[i-2]):        # Gap between i-2 and i
+                fvgs.append((df.index[i-1], df['high'].iloc[i-2], df['low'].iloc[i]))
+        return fvgs
+
+    def is_unmitigated(self, df: pd.DataFrame, fvg: Tuple[Any, float, float], current_index: int) -> bool:
+        """Check if a Fair Value Gap has not been mitigated."""
+        subset = df.loc[fvg[0]:df.index[current_index]]
+        # FVG is mitigated if price has traded through the gap
+        return not ((subset['low'] <= fvg[1]) & (subset['high'] >= fvg[2])).any()
+
+    def has_rejection_candle(self, df: pd.DataFrame, fvg: Tuple[Any, float, float], current_index: int) -> bool:
+        """Check if there's a rejection candle at the FVG."""
+        candle = df.iloc[current_index]
+        # Bullish rejection: price closes within FVG after testing below it
+        return (fvg[1] <= candle['close'] <= fvg[2] and 
+                candle['close'] > candle['open'] and
+                (candle['low'] < fvg[1] or candle['open'] < fvg[1]))
+
+    def has_bos(self, df: pd.DataFrame, current_index: int, lookback: int = 10) -> bool:
+        """Check if there's a breakout of structure in recent candles."""
+        start_idx = max(1, current_index - lookback)
+        for i in range(start_idx, current_index):
+            if df['close'].iloc[i] > df['high'].iloc[i-1]:
+                return True
+        return False
+
+    def get_trend_direction(self, daily_df: pd.DataFrame, current_date: datetime) -> Tuple[str, str]:
+        """Determine market trend and regime with relaxed conditions."""
+        subset = daily_df[daily_df.index <= current_date]
+        if len(subset) < 20:
+            return 'neutral', 'unknown'
+        
+        # Relaxed trend determination
+        trend = 'neutral'
+        # Lower ADX threshold from 25 to 20
+        if (subset['sma_slope'].iloc[-1] > 0 and 
+            subset['adx'].iloc[-1] > 20 and 
+            subset['close'].iloc[-1] > subset['sma_20'].iloc[-1]):  # Changed from previous high comparison
+            trend = 'up'
+        elif (subset['sma_slope'].iloc[-1] < 0 and 
+              subset['adx'].iloc[-1] > 20 and 
+              subset['close'].iloc[-1] < subset['sma_20'].iloc[-1]):  # Changed from previous low comparison
+            trend = 'down'
+        
+        # Accept both trending and ranging regimes
+        regime = 'trending' if subset['bb_width'].iloc[-1] > subset['bb_width'].quantile(0.5) else 'ranging'
+        
+        return trend, regime
+
+    def is_potential_trend(self, df: pd.DataFrame) -> bool:
+        """Alternative trend detection with relaxed conditions."""
+        # Check if price is above 20-day SMA
+        above_sma = df['close'].iloc[-1] > df['sma_20'].iloc[-1]
+        
+        # Check if 20-day SMA is higher than 50-day SMA (if available)
+        sma_50 = df['close'].rolling(window=50, min_periods=1).mean().iloc[-1]
+        sma_alignment = df['sma_20'].iloc[-1] > sma_50
+        
+        # Check for higher lows in recent price action
+        recent_lows = df['low'].iloc[-10:].rolling(window=3).min()
+        higher_lows = recent_lows.is_monotonic_increasing
+        
+        # Return true if at least 2 of 3 conditions are met
+        conditions_met = sum([above_sma, sma_alignment, higher_lows])
+        return conditions_met >= 2
+
+    def calculate_targets_and_trailing_sl(self, df_5min: pd.DataFrame, entry_price: float, 
+                                        initial_sl: float, atr: float) -> Tuple[float, float, Optional[float]]:
+        """Calculate profit targets and trailing stop loss."""
+        risk = entry_price - initial_sl
+        tp1 = entry_price + 2 * atr
+        tp2_initial = entry_price + 4 * atr
+        
+        trailing_sl = initial_sl
+        highest_high = entry_price
+        breakeven_hit = False
+        tp1_hit = False
+
+        for _, row in df_5min.iterrows():
+            highest_high = max(highest_high, row['high'])
+            
+            # Move to breakeven when price moves in favor by 1R
+            if not breakeven_hit and (row['high'] - entry_price) >= risk:
+                trailing_sl = entry_price
+                breakeven_hit = True
+            
+            # Trail the stop loss
+            if breakeven_hit:
+                trailing_sl = max(trailing_sl, highest_high - atr)
+            
+            # Check if stopped out
+            if row['low'] <= trailing_sl:
+                return trailing_sl, tp1, tp2_initial if tp1_hit else None
+            
+            # Check if TP1 hit
+            if row['high'] >= tp1 and not tp1_hit:
+                trailing_sl = max(trailing_sl, entry_price)  # Ensure at least breakeven
+                tp1_hit = True
+
+        # If not stopped out by end of data
+        return trailing_sl, tp1, max(tp2_initial, highest_high - atr) if tp1_hit else None
+
+    async def scan_single_stock(self, symbol: str, start_date: datetime, end_date: datetime, 
+                              duration: str = '365 D') -> List[Dict]:
+        """Scan a single stock for trading setups."""
+        try:
+            # Ensure duration has proper format
+            if ' ' not in duration and any(c.isalpha() for c in duration):
+                for i, char in enumerate(duration):
+                    if char.isalpha():
+                        duration = duration[:i] + ' ' + duration[i:]
+                        break
+            
+            # Get historical data
+            hourly_df = await self.get_historical_data(symbol, end_date, duration, '1 hour')
+            daily_df = await self.get_historical_data(symbol, end_date, duration, '1 day')
+            
+            # Check if we have enough data
+            if not all([hourly_df is not None, daily_df is not None, 
+                      len(hourly_df) >= 15, len(daily_df) >= 20]):
+                logger.warning(f"Insufficient data for {symbol}")
+                return []
+
+            setups = []
+            # Scan each hourly candle
+            for idx in range(14, len(hourly_df)):
+                time = hourly_df.index[idx]
+                
+                # Skip if outside our date range
+                if not (start_date <= time <= end_date):
+                    continue
+
+                # Get data up to current candle
+                data = hourly_df.iloc[:idx + 1]
+                
+                # Check market trend and regime
+                trend, regime = self.get_trend_direction(daily_df, time)
+                # Accept both up trends and neutral trends
+                if trend == 'down':  # Only exclude downtrends
+                    continue
+
+                # Find FVGs and check setup conditions
+                fvgs = self.find_fvg(data, idx)
+                if not fvgs:
+                    continue
+                    
+                fvg = fvgs[-1]  # Use the most recent FVG
+                
+                # Check if FVG is valid for our setup
+                if not self.is_unmitigated(data, fvg, idx) or \
+                   not self.has_rejection_candle(data, fvg, idx):
+                    # Removed the BOS check
+                    continue
+
+                # Setup entry parameters
+                entry = data['close'].iloc[idx]
+                sl = data['low'].iloc[idx]
+                atr = data['atr'].iloc[idx]
+                
+                # Get 5-minute data for detailed analysis
+                df_5min = await self.get_5min_data(symbol, time, end_date)
+                if df_5min is None or len(df_5min) < 1:
+                    continue
+
+                # Calculate targets and trailing stop
+                trailing_sl, tp1, tp2 = self.calculate_targets_and_trailing_sl(df_5min, entry, sl, atr)
+                
+                # Calculate risk-reward ratio
+                rr = (tp2 or tp1 - entry) / (entry - sl) if entry > sl else 0
+                
+                # Add setup if risk-reward is favorable
+                if rr >= 2:  # Changed from 3 to 2
+                    setups.append({
+                        'symbol': symbol, 
+                        'date': time, 
+                        'entry': entry, 
+                        'initial_sl': sl,
+                        'trailing_sl': trailing_sl, 
+                        'target_1': tp1, 
+                        'target_2': tp2, 
+                        'rr_ratio': rr, 
+                        'shares': 1.0,
+                        'fvg_high': fvg[1],
+                        'fvg_low': fvg[2]
+                    })
+                    
+            return setups
+            
+        except Exception as e:
+            logger.error(f"Error scanning {symbol}: {e}")
+            return []
+
+    async def scan_market(self, symbols: List[str], start_date: datetime, end_date: datetime, 
+                    duration: str = '365 D') -> List[Dict]:
+        """Scan multiple stocks for trading setups."""
+        # Ensure duration has proper format
+        if ' ' not in duration and any(c.isalpha() for c in duration):
+            for i, char in enumerate(duration):
+                if char.isalpha():
+                    duration = duration[:i] + ' ' + duration[i:]
+                    break
+        
+        setups = []
+        # Process one symbol at a time to isolate issues
+        for symbol in symbols:
+            try:
+                result = await self.scan_single_stock(symbol, start_date, end_date, duration)
+                setups.extend(result)
+            except Exception as e:
+                logger.error(f"Failed to scan {symbol}: {e}")
+        
+        return setups
+
+    def apply_fees_and_slippage(self, setups: List[Dict]) -> List[Dict]:
+        """Apply trading fees and slippage to setup calculations."""
+        for setup in setups:
+            # Apply slippage to entry and stop loss
+            slippage = setup['entry'] * self.max_slippage_percent
+            setup['entry'] += slippage
+            setup['initial_sl'] -= slippage
+            
+            # Calculate fees
+            setup['fee_per_trade'] = self.fee_per_share * setup['shares'] * 2  # Entry and exit
+            setup['slippage'] = slippage
+            
+            # Recalculate risk-reward with slippage
+            target = setup['target_2'] or setup['target_1']
+            setup['rr_ratio'] = (target - setup['entry']) / (setup['entry'] - setup['initial_sl'])
+            
+        return setups
+
+    def position_size_calculator(self, setups: List[Dict], account_size: float, 
+                               risk_per_trade: float = 0.05) -> List[Dict]:
+        """Calculate position size based on account risk management."""
+        for setup in setups:
+            risk_amount = account_size * risk_per_trade
+            risk_per_share = setup['entry'] - setup['initial_sl']
+            
+            if risk_per_share <= 0:
+                setup['shares'] = 0
+                continue
+                
+            # Calculate shares based on risk
+            shares = risk_amount / risk_per_share
+            
+            # Round down to whole shares
+            setup['shares'] = int(shares)
+            setup['risk_amount'] = setup['shares'] * risk_per_share
+            
+        return setups
+
+
+async def main():
+    # Initialize scanner
+    scanner = MarketScanner(host='127.0.0.1', port=7497, client_id=1)
+    
+    try:
+        # Connect to Interactive Brokers
+        if not await scanner.connect():
+            logger.error("Aborting due to connection failure")
+            return
+
+        # Define scan period
+        end_date = datetime.now(UTC)
+        start_date = end_date - timedelta(days=365)
+        
+        # Define symbols to scan
+        symbols = ["AAPL"]
+        
+        logger.info(f"Scanning {symbols} from {start_date} to {end_date}")
+        
+        # Scan for trading setups
+        setups = await scanner.scan_market(symbols, start_date, end_date)
+        
+        # Process and display results
+        if setups:
+            # Apply fees and slippage to setups
+            adjusted_setups = scanner.apply_fees_and_slippage(setups)
+            
+            # Calculate position sizes (assuming $100,000 account with 5% risk per trade)
+            sized_setups = scanner.position_size_calculator(adjusted_setups, 100000, 0.05)
+            
+            logger.info(f"Found {len(sized_setups)} valid setups")
+            
+            # Display setup details
+            for s in sized_setups:
+                tp2_str = f"{s['target_2']:.2f}" if s['target_2'] is not None else "N/A"
+                logger.info(f"{s['symbol']} at {s['date']}: Entry: {s['entry']:.2f}, SL: {s['initial_sl']:.2f}, "
+                           f"TP1: {s['target_1']:.2f}, TP2: {tp2_str}, RR: {s['rr_ratio']:.2f}, "
+                           f"Shares: {s['shares']}, Risk: ${s.get('risk_amount', 0):.2f}")
+        else:
+            logger.info("No valid setups found")
+            
+    except Exception as e:
+        logger.error(f"Main execution failed: {e}")
+    finally:
+        # Ensure we disconnect properly
+        scanner.disconnect()
+
+if __name__ == "__main__":
+    asyncio.run(main())
