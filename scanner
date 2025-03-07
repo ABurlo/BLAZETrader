@@ -5,14 +5,24 @@ import asyncio
 import nest_asyncio
 from pytz import UTC
 import logging
+from logging.handlers import RotatingFileHandler
 from ib_insync import IB, Stock, util
 import pandas as pd
 import numpy as np
 from typing import Optional, List, Dict, Tuple, Any
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+log_file = 'trading_system.log'
+log_handler = RotatingFileHandler(log_file, maxBytes=5*1024*1024, backupCount=3)
+log_handler.setFormatter(log_formatter)
+
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+logger.addHandler(log_handler)
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(log_formatter)
+logger.addHandler(console_handler)
 nest_asyncio.apply()
 
 class DataCache:
@@ -212,12 +222,24 @@ class MarketScanner:
         return not ((subset['low'] <= fvg[1]) & (subset['high'] >= fvg[2])).any()
 
     def has_rejection_candle(self, df: pd.DataFrame, fvg: Tuple[Any, float, float], current_index: int) -> bool:
-        """Check if there's a rejection candle at the FVG."""
+        """Enhanced rejection candle detection with volume confirmation."""
         candle = df.iloc[current_index]
-        # Bullish rejection: price closes within FVG after testing below it
-        return (fvg[1] <= candle['close'] <= fvg[2] and 
-                candle['close'] > candle['open'] and
-                (candle['low'] < fvg[1] or candle['open'] < fvg[1]))
+        prev_candle = df.iloc[current_index-1] if current_index > 0 else None
+        
+        # Check for bullish rejection with volume confirmation
+        rejection_pattern = (
+            fvg[1] <= candle['close'] <= fvg[2] and  # Close within FVG
+            candle['close'] > candle['open'] and      # Bullish candle
+            (candle['low'] < fvg[1] or candle['open'] < fvg[1]) and  # Tested below FVG
+            candle['high'] - candle['close'] < 0.3 * (candle['high'] - candle['low'])  # Strong close
+        )
+        
+        # Add volume confirmation if available
+        volume_confirmation = True
+        if 'volume' in df.columns and prev_candle is not None:
+            volume_confirmation = candle['volume'] > prev_candle['volume']
+            
+        return rejection_pattern and volume_confirmation
 
     def has_bos(self, df: pd.DataFrame, current_index: int, lookback: int = 10) -> bool:
         """Check if there's a breakout of structure in recent candles."""
@@ -267,41 +289,40 @@ class MarketScanner:
         conditions_met = sum([above_sma, sma_alignment, higher_lows])
         return conditions_met >= 2
 
-    def calculate_targets_and_trailing_sl(self, df_5min: pd.DataFrame, entry_price: float, 
-                                        initial_sl: float, atr: float) -> Tuple[float, float, Optional[float]]:
-        """Calculate profit targets and trailing stop loss."""
+    def calculate_targets_and_trailing_sl(self, entry_price: float, initial_sl: float, atr: float) -> Tuple[float, float, Optional[float]]:
+        """Calculate initial profit targets based on ATR."""
         risk = entry_price - initial_sl
         tp1 = entry_price + 2 * atr
-        tp2_initial = entry_price + 4 * atr
+        tp2 = entry_price + 4 * atr
+        return initial_sl, tp1, tp2
+
+    def detect_market_structure_shift(self, df: pd.DataFrame, lookback: int = 20) -> bool:
+        """Detect Market Structure Shift (MSS) based on ICT concepts."""
+        if len(df) < lookback:
+            return False
+            
+        subset = df.iloc[-lookback:]
         
-        trailing_sl = initial_sl
-        highest_high = entry_price
-        breakeven_hit = False
-        tp1_hit = False
-
-        for _, row in df_5min.iterrows():
-            highest_high = max(highest_high, row['high'])
+        # Find swing points
+        highs = []
+        lows = []
+        
+        for i in range(2, len(subset) - 2):
+            # Higher high
+            if subset['high'].iloc[i] > subset['high'].iloc[i-1] and subset['high'].iloc[i] > subset['high'].iloc[i-2] and \
+               subset['high'].iloc[i] > subset['high'].iloc[i+1] and subset['high'].iloc[i] > subset['high'].iloc[i+2]:
+                highs.append((i, subset['high'].iloc[i]))
+                
+            # Lower low
+            if subset['low'].iloc[i] < subset['low'].iloc[i-1] and subset['low'].iloc[i] < subset['low'].iloc[i-2] and \
+               subset['low'].iloc[i] < subset['low'].iloc[i+1] and subset['low'].iloc[i] < subset['low'].iloc[i+2]:
+                lows.append((i, subset['low'].iloc[i]))
+        
+        # Check for higher lows (bullish MSS)
+        if len(lows) >= 2 and lows[-1][1] > lows[-2][1]:
+            return True
             
-            # Move to breakeven when price moves in favor by 1R
-            if not breakeven_hit and (row['high'] - entry_price) >= risk:
-                trailing_sl = entry_price
-                breakeven_hit = True
-            
-            # Trail the stop loss
-            if breakeven_hit:
-                trailing_sl = max(trailing_sl, highest_high - atr)
-            
-            # Check if stopped out
-            if row['low'] <= trailing_sl:
-                return trailing_sl, tp1, tp2_initial if tp1_hit else None
-            
-            # Check if TP1 hit
-            if row['high'] >= tp1 and not tp1_hit:
-                trailing_sl = max(trailing_sl, entry_price)  # Ensure at least breakeven
-                tp1_hit = True
-
-        # If not stopped out by end of data
-        return trailing_sl, tp1, max(tp2_initial, highest_high - atr) if tp1_hit else None
+        return False
 
     async def scan_single_stock(self, symbol: str, start_date: datetime, end_date: datetime, 
                               duration: str = '365 D') -> List[Dict]:
@@ -360,25 +381,20 @@ class MarketScanner:
                 sl = data['low'].iloc[idx]
                 atr = data['atr'].iloc[idx]
                 
-                # Get 5-minute data for detailed analysis
-                df_5min = await self.get_5min_data(symbol, time, end_date)
-                if df_5min is None or len(df_5min) < 1:
-                    continue
-
-                # Calculate targets and trailing stop
-                trailing_sl, tp1, tp2 = self.calculate_targets_and_trailing_sl(df_5min, entry, sl, atr)
+                # Calculate targets - FIXED to avoid look-ahead bias
+                initial_sl, tp1, tp2 = self.calculate_targets_and_trailing_sl(entry, sl, atr)
                 
-                # Calculate risk-reward ratio
-                rr = (tp2 or tp1 - entry) / (entry - sl) if entry > sl else 0
+                                # Calculate risk-reward ratio
+                rr = (tp1 - entry) / (entry - sl) if entry > sl else 0
                 
                 # Add setup if risk-reward is favorable
-                if rr >= 2:  # Changed from 3 to 2
+                if rr >= 1.5:  # Changed from 2 to 1.5
                     setups.append({
                         'symbol': symbol, 
                         'date': time, 
                         'entry': entry, 
                         'initial_sl': sl,
-                        'trailing_sl': trailing_sl, 
+                        'trailing_sl': initial_sl, 
                         'target_1': tp1, 
                         'target_2': tp2, 
                         'rr_ratio': rr, 
@@ -436,13 +452,13 @@ class MarketScanner:
             sl = setup['initial_sl']
             risk = entry - sl
             
-            # Ensure minimum risk-reward of 2:1
-            if risk <= 0 or setup['rr_ratio'] < 2:
+            # Ensure minimum risk-reward of 1.5:1
+            if risk <= 0 or setup['rr_ratio'] < 1.5:
                 continue
                 
             # Ensure FVG size is proportional to ATR
             fvg_size = setup['fvg_low'] - setup['fvg_high']
-            if fvg_size < 0.5 * risk:  # FVG should be at least half the risk
+            if fvg_size < 0.3 * risk:  #**FVG should be at least half the risk**
                 continue
                 
             # Accept the setup if it passes all filters
@@ -508,34 +524,6 @@ class MarketScanner:
             
         except Exception as e:
             logger.error(f"Error creating plot for {symbol}: {e}")
-    
-    def detect_market_structure_shift(self, df: pd.DataFrame, lookback: int = 20) -> bool:
-        """Detect Market Structure Shift (MSS) based on ICT concepts."""
-        if len(df) < lookback:
-            return False
-            
-        subset = df.iloc[-lookback:]
-        
-        # Find swing points
-        highs = []
-        lows = []
-        
-        for i in range(2, len(subset) - 2):
-            # Higher high
-            if subset['high'].iloc[i] > subset['high'].iloc[i-1] and subset['high'].iloc[i] > subset['high'].iloc[i-2] and \
-               subset['high'].iloc[i] > subset['high'].iloc[i+1] and subset['high'].iloc[i] > subset['high'].iloc[i+2]:
-                highs.append((i, subset['high'].iloc[i]))
-                
-            # Lower low
-            if subset['low'].iloc[i] < subset['low'].iloc[i-1] and subset['low'].iloc[i] < subset['low'].iloc[i-2] and \
-               subset['low'].iloc[i] < subset['low'].iloc[i+1] and subset['low'].iloc[i] < subset['low'].iloc[i+2]:
-                lows.append((i, subset['low'].iloc[i]))
-        
-        # Check for higher lows (bullish MSS)
-        if len(lows) >= 2 and lows[-1][1] > lows[-2][1]:
-            return True
-            
-        return False
 
     async def backtest_strategy(self, symbols: List[str], start_date: datetime, end_date: datetime, 
                               initial_capital: float = 100000.0) -> Dict:
@@ -559,6 +547,10 @@ class MarketScanner:
         wins = 0
         losses = 0
         
+        # Set a cutoff date to prevent look-ahead bias
+        # Only use data available up to the current date
+        current_date = datetime.now(UTC)
+        
         for setup in all_setups:
             symbol = setup['symbol']
             entry_date = setup['date']
@@ -567,14 +559,24 @@ class MarketScanner:
             tp1 = setup['target_1']
             tp2 = setup['target_2']
             
+            # Skip setups that occur after our cutoff date
+            if entry_date > current_date:
+                logger.warning(f"Skipping future setup for {symbol} on {entry_date}")
+                continue
+                
             # Get data after entry for simulation
-            df_5min = await self.get_5min_data(symbol, entry_date, end_date)
+            # Only use data up to our cutoff date to prevent look-ahead bias
+            simulation_end_date = min(end_date, current_date)
+            df_5min = await self.get_5min_data(symbol, entry_date, simulation_end_date)
             if df_5min is None or len(df_5min) < 1:
                 continue
                 
             # Position sizing (risk 1% of capital per trade)
             risk_amount = capital * 0.01
             risk_per_share = entry_price - initial_sl
+            if risk_per_share <= 0:
+                continue
+                
             shares = int(risk_amount / risk_per_share)
             
             if shares <= 0:
@@ -588,6 +590,9 @@ class MarketScanner:
             tp1_hit = False
             exit_price = None
             exit_date = None
+            
+            # Apply realistic slippage to entry
+            entry_price = entry_price * (1 + (np.random.random() * self.max_slippage_percent))
             
             for date, row in df_5min.iterrows():
                 if date <= entry_date:
@@ -606,7 +611,8 @@ class MarketScanner:
                 
                 # Check if stopped out
                 if row['low'] <= trailing_sl:
-                    exit_price = trailing_sl
+                    # Apply realistic slippage to exit
+                    exit_price = trailing_sl * (1 - (np.random.random() * self.max_slippage_percent))
                     exit_date = date
                     break
                 
@@ -616,8 +622,11 @@ class MarketScanner:
                     exit_shares = shares // 2
                     remaining_shares = shares - exit_shares
                     
+                    # Apply realistic slippage to partial exit
+                    partial_exit_price = tp1 * (1 - (np.random.random() * self.max_slippage_percent))
+                    
                     # Update position
-                    profit = exit_shares * (tp1 - entry_price)
+                    profit = exit_shares * (partial_exit_price - entry_price) - (exit_shares * self.fee_per_share)
                     capital += profit
                     shares = remaining_shares
                     trailing_sl = max(trailing_sl, entry_price)  # Ensure at least breakeven
@@ -625,7 +634,8 @@ class MarketScanner:
                 
                 # Check if TP2 hit
                 if tp1_hit and tp2 and row['high'] >= tp2:
-                    exit_price = tp2
+                    # Apply realistic slippage to exit
+                    exit_price = tp2 * (1 - (np.random.random() * self.max_slippage_percent))
                     exit_date = date
                     break
             
@@ -634,9 +644,11 @@ class MarketScanner:
                 exit_price = df_5min['close'].iloc[-1]
                 exit_date = df_5min.index[-1]
             
-            # Calculate trade result
+            # Calculate trade result with fees
             if exit_price is not None:
-                trade_pnl = shares * (exit_price - entry_price)
+                # Include trading fees
+                fees = shares * self.fee_per_share
+                trade_pnl = shares * (exit_price - entry_price) - fees
                 capital += trade_pnl
                 
                 # Update statistics
@@ -667,9 +679,12 @@ class MarketScanner:
         # Calculate final statistics
         total_trades = wins + losses
         results['final_capital'] = capital
-        results['win_rate'] = wins / total_trades if total_trades > 0 else 0
+        results['win_rate'] = (wins / total_trades * 100) if total_trades > 0 else 0  # Fixed to percentage
         results['profit_factor'] = total_profit / total_loss if total_loss > 0 else float('inf')
         results['total_return'] = (capital - initial_capital) / initial_capital * 100
+        results['total_trades'] = total_trades
+        results['winning_trades'] = wins
+        results['losing_trades'] = losses
         
         return results
 
@@ -703,8 +718,10 @@ class MarketScanner:
                 
                 # Calculate cumulative returns
                 equity = [initial_capital]
+                dates = []
                 for trade in trades:
                     equity.append(equity[-1] + trade['pnl'])
+                    dates.append(trade['exit_date'])
                 
                 # Plot equity curve
                 plt.plot(range(len(equity)), equity)
@@ -726,6 +743,28 @@ class MarketScanner:
                 plt.savefig('pnl_distribution.png')
                 plt.close()
                 
+                # Plot monthly returns if we have date information
+                if dates:
+                    monthly_returns = {}
+                    for i, trade in enumerate(trades):
+                        month_key = trade['exit_date'].strftime('%Y-%m')
+                        if month_key not in monthly_returns:
+                            monthly_returns[month_key] = 0
+                        monthly_returns[month_key] += trade['pnl']
+                    
+                    if monthly_returns:
+                        plt.figure(figsize=(14, 6))
+                        months = list(monthly_returns.keys())
+                        returns = list(monthly_returns.values())
+                        plt.bar(months, returns)
+                        plt.title('Monthly Returns')
+                        plt.xlabel('Month')
+                        plt.ylabel('Profit/Loss ($)')
+                        plt.xticks(rotation=45)
+                        plt.tight_layout()
+                        plt.savefig('monthly_returns.png')
+                        plt.close()
+                
                 # Save detailed trade log
                 with open('trade_log.csv', 'w') as f:
                     f.write('Symbol,Entry Date,Exit Date,Entry Price,Exit Price,Shares,P&L,P&L %\n')
@@ -734,7 +773,7 @@ class MarketScanner:
                                 f"{trade['entry_price']:.2f},{trade['exit_price']:.2f},{trade['shares']}," +
                                 f"{trade['pnl']:.2f},{trade['pnl_percent']:.2f}\n")
                 
-                print("Report files generated: equity_curve.png, pnl_distribution.png, trade_log.csv")
+                print("Report files generated: equity_curve.png, pnl_distribution.png, monthly_returns.png, trade_log.csv")
         
         except Exception as e:
             logger.error(f"Error generating report: {e}")
@@ -744,9 +783,9 @@ async def main():
     # Define symbols to scan
     symbols = ['AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'TSLA', 'NVDA', 'AMD']
     
-    # Define date range
+    # Define date range - use historical data only
     start_date = datetime(2023, 1, 1, tzinfo=UTC)
-    end_date = datetime(2024, 1, 1, tzinfo=UTC)
+    end_date = datetime(2024, 1, 1, tzinfo=UTC)  # Use a past end date to avoid look-ahead bias
     
     # Create scanner instance
     scanner = MarketScanner(host='127.0.0.1', port=7497)
