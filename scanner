@@ -101,7 +101,7 @@ class MarketScanner:
             self._connected = False
 
     async def get_historical_data(self, symbol: str, end_date: datetime, 
-                                 duration: str, bar_size: str) -> Optional[pd.DataFrame]:
+                             duration: str, bar_size: str) -> Optional[pd.DataFrame]:
         """Fetch historical data for a symbol with technical indicators."""
         # Check cache first
         if self.cache.is_cached(symbol, bar_size):
@@ -128,8 +128,7 @@ class MarketScanner:
             if not bars:
                 logger.warning(f"No historical data available for {symbol}")
                 return None
-
-            # Convert to DataFrame and process
+                
             df = util.df(bars)
             df['date'] = pd.to_datetime(df['date'], utc=True, errors='coerce')
             
@@ -137,6 +136,7 @@ class MarketScanner:
                 logger.error(f"Date parsing failed for {symbol}")
                 return None
                 
+            df = df.copy()  # Create an explicit copy to avoid SettingWithCopyWarning
             df.set_index('date', inplace=True)
             
             # Calculate ATR
@@ -226,29 +226,23 @@ class MarketScanner:
         return fvgs
 
     def has_rejection_candle(self, df: pd.DataFrame, fvg: Tuple[Any, float, float], current_index: int) -> bool:
-        """Enhanced rejection candle detection with debugging."""
+        """Enhanced rejection candle detection with volume confirmation."""
         candle = df.iloc[current_index]
         prev_candle = df.iloc[current_index-1] if current_index > 0 else None
         
-        # Check conditions individually for debugging
-        close_in_fvg = fvg[1] <= candle['close'] <= fvg[2]
-        is_bullish = candle['close'] > candle['open']
-        tested_below = (candle['low'] < fvg[1] or candle['open'] < fvg[1])
-        strong_close = candle['high'] - candle['close'] < 0.3 * (candle['high'] - candle['low'])
-        
-        # Log detailed rejection candle analysis periodically
-        if current_index % 100 == 0:
-            logger.debug(f"Rejection candle check at index {current_index}: "
-                        f"Close in FVG: {close_in_fvg}, Bullish: {is_bullish}, "
-                        f"Tested below: {tested_below}, Strong close: {strong_close}")
+        # Check for bullish rejection with volume confirmation
+        rejection_pattern = (
+            fvg[1] <= candle['close'] <= fvg[2] and  # Close within FVG
+            candle['close'] > candle['open'] and      # Bullish candle
+            (candle['low'] < fvg[1] or candle['open'] < fvg[1]) and  # Tested below FVG
+            candle['high'] - candle['close'] < 0.3 * (candle['high'] - candle['low'])  # Strong close
+        )
         
         # Add volume confirmation if available
         volume_confirmation = True
         if 'volume' in df.columns and prev_candle is not None:
             volume_confirmation = candle['volume'] > prev_candle['volume']
             
-        rejection_pattern = close_in_fvg and is_bullish and tested_below and strong_close
-        
         return rejection_pattern and volume_confirmation
     
     def has_closing_into_fvg(self, df: pd.DataFrame, fvg: Tuple[Any, float, float], current_index: int) -> bool:
@@ -329,7 +323,11 @@ class MarketScanner:
     def has_rsi_confirmation(self, df: pd.DataFrame, current_index: int) -> bool:
         """Check if RSI confirms the potential trade direction."""
         if 'rsi' not in df.columns:
-            df['rsi'] = self.calculate_rsi(df)
+            # Create a copy first to avoid the warning
+            df_copy = df.copy()
+            df_copy['rsi'] = self.calculate_rsi(df_copy)
+            # Now assign back to the original dataframe properly
+            df.loc[:, 'rsi'] = df_copy['rsi']
         
         rsi = df['rsi'].iloc[current_index]
         
@@ -344,9 +342,10 @@ class MarketScanner:
     def has_higher_timeframe_alignment(self, symbol: str, current_time: datetime, setup_direction: str) -> bool:
         """Check if higher timeframe trend aligns with the setup direction."""
         try:
-            # Get daily data
+            # Get daily data up to current_time only
+            end_date = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
             daily_df = asyncio.run(self.get_historical_data(
-                symbol, current_time, '30 D', '1 day'
+                symbol, end_date, '30 D', '1 day'
             ))
             
             if daily_df is None or daily_df.empty:
@@ -358,7 +357,7 @@ class MarketScanner:
             # Check alignment
             return (setup_direction == 'bullish' and trend == 'up') or \
                 (setup_direction == 'bearish' and trend == 'down')
-                
+                    
         except Exception as e:
             logger.error(f"Error checking higher timeframe alignment: {e}")
             return False
@@ -532,11 +531,6 @@ class MarketScanner:
                 
                 unmitigated_count += 1
                 
-                if not self.is_unmitigated(data, fvg, idx):
-                    continue
-
-                unmitigated_count += 1
-
                 # Check for confirmation signals - need at least 2 confirmations
                 confirmation_count = 0
 
@@ -1178,11 +1172,11 @@ class BacktestEngine:
 
 async def main():
     # Define symbols to scan
-    symbols = ['AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'NVDA', 'TSLA', 'AMD']
+    symbols = ["CAT", "NEE", "PLD", "LIN", "GOOGL", "CVX", "CAT", "PG", "JPM", "UNH", "MSFT"]
     
     # Define date range for backtest
-    start_date = datetime(2023, 1, 1, tzinfo=UTC)
-    end_date = datetime(2023, 12, 31, tzinfo=UTC)
+    start_date = datetime(2024, 1, 1, tzinfo=UTC)
+    end_date = datetime(2024, 12, 31, tzinfo=UTC)
     
     # Initialize scanner and connect to IB
     scanner = MarketScanner()
