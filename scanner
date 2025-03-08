@@ -54,7 +54,6 @@ class DataCache:
         except Exception as e:
             logger.error(f"Error saving cache for {symbol}_{timeframe}: {e}")
 
-
 class MarketScanner:
     """Scans the market for trading setups based on fair value gaps (FVG)."""
     
@@ -206,14 +205,66 @@ class MarketScanner:
         return df[df.index >= start_time] if df is not None and not df.empty else None
 
     def find_fvg(self, df: pd.DataFrame, current_index: int) -> List[Tuple[Any, float, float]]:
-        """Find Fair Value Gaps in the data."""
+        """Find Fair Value Gaps in the data with improved detection and debugging."""
         fvgs = []
+        potential_fvgs = 0
+        
         for i in range(2, current_index + 1):
             # Bullish FVG: Current candle's low is higher than previous-1 candle's high
-            if (df['close'].iloc[i-1] > df['open'].iloc[i-1] and  # Previous candle is bullish
-                df['low'].iloc[i] > df['high'].iloc[i-2]):        # Gap between i-2 and i
-                fvgs.append((df.index[i-1], df['high'].iloc[i-2], df['low'].iloc[i]))
+            if (df['low'].iloc[i] > df['high'].iloc[i-2]):
+                potential_fvgs += 1
+                # Check for strong momentum
+                if df['close'].iloc[i-1] > df['open'].iloc[i-1]:  # Previous candle is bullish
+                    fvgs.append((df.index[i-1], df['high'].iloc[i-2], df['low'].iloc[i]))
+                # Alternative pattern: strong bullish candle after the gap
+                elif i < current_index and df['close'].iloc[i] > df['open'].iloc[i] * 1.005:
+                    fvgs.append((df.index[i], df['high'].iloc[i-2], df['low'].iloc[i]))
+        
+        if current_index >= 100 and current_index % 100 == 0:
+            logger.debug(f"FVG detection at index {current_index}: Found {len(fvgs)} valid FVGs out of {potential_fvgs} potential gaps")
+            
         return fvgs
+
+    def has_rejection_candle(self, df: pd.DataFrame, fvg: Tuple[Any, float, float], current_index: int) -> bool:
+        """Enhanced rejection candle detection with debugging."""
+        candle = df.iloc[current_index]
+        prev_candle = df.iloc[current_index-1] if current_index > 0 else None
+        
+        # Check conditions individually for debugging
+        close_in_fvg = fvg[1] <= candle['close'] <= fvg[2]
+        is_bullish = candle['close'] > candle['open']
+        tested_below = (candle['low'] < fvg[1] or candle['open'] < fvg[1])
+        strong_close = candle['high'] - candle['close'] < 0.3 * (candle['high'] - candle['low'])
+        
+        # Log detailed rejection candle analysis periodically
+        if current_index % 100 == 0:
+            logger.debug(f"Rejection candle check at index {current_index}: "
+                        f"Close in FVG: {close_in_fvg}, Bullish: {is_bullish}, "
+                        f"Tested below: {tested_below}, Strong close: {strong_close}")
+        
+        # Add volume confirmation if available
+        volume_confirmation = True
+        if 'volume' in df.columns and prev_candle is not None:
+            volume_confirmation = candle['volume'] > prev_candle['volume']
+            
+        rejection_pattern = close_in_fvg and is_bullish and tested_below and strong_close
+        
+        return rejection_pattern and volume_confirmation
+    
+    def has_closing_into_fvg(self, df: pd.DataFrame, fvg: Tuple[Any, float, float], current_index: int) -> bool:
+        """Check if candle closes inside the FVG without penetrating through."""
+        candle = df.iloc[current_index]
+        
+        # Check if price entered the FVG
+        entered_fvg = (candle['low'] <= fvg[2] and candle['high'] >= fvg[1])
+        
+        # Check if price closed inside the FVG
+        closed_in_fvg = (fvg[1] <= candle['close'] <= fvg[2])
+        
+        # Check that price didn't penetrate through the entire FVG
+        not_penetrated = not (candle['low'] <= fvg[1] and candle['high'] >= fvg[2])
+        
+        return entered_fvg and closed_in_fvg and not_penetrated
 
     def is_unmitigated(self, df: pd.DataFrame, fvg: Tuple[Any, float, float], current_index: int) -> bool:
         """Check if a Fair Value Gap has not been mitigated."""
@@ -241,6 +292,77 @@ class MarketScanner:
             
         return rejection_pattern and volume_confirmation
 
+    def has_volume_confirmation(self, df: pd.DataFrame, current_index: int, lookback: int = 5) -> bool:
+        """Check if current volume is higher than recent average volume."""
+        if 'volume' not in df.columns or current_index < lookback:
+            return False
+            
+        current_volume = df['volume'].iloc[current_index]
+        avg_volume = df['volume'].iloc[current_index-lookback:current_index].mean()
+        
+        return current_volume > avg_volume * 1.2  # 20% higher than average
+
+    def has_ma_alignment(self, df: pd.DataFrame, current_index: int) -> bool:
+        """Check if moving averages are aligned in favor of the trade direction."""
+        if 'sma_20' not in df.columns or 'sma_50' not in df.columns:
+            return False
+        
+        # For bullish setups
+        if df['close'].iloc[current_index] > df['open'].iloc[current_index]:
+            return (df['sma_20'].iloc[current_index] > df['sma_50'].iloc[current_index] and
+                    df['close'].iloc[current_index] > df['sma_20'].iloc[current_index])
+        
+        # For bearish setups
+        else:
+            return (df['sma_20'].iloc[current_index] < df['sma_50'].iloc[current_index] and
+                    df['close'].iloc[current_index] < df['sma_20'].iloc[current_index])
+
+    def calculate_rsi(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
+        """Calculate Relative Strength Index."""
+        delta = df['close'].diff()
+        gain = delta.where(delta > 0, 0).rolling(window=period).mean()
+        loss = -delta.where(delta < 0, 0).rolling(window=period).mean()
+        
+        rs = gain / loss
+        return 100 - (100 / (1 + rs))
+
+    def has_rsi_confirmation(self, df: pd.DataFrame, current_index: int) -> bool:
+        """Check if RSI confirms the potential trade direction."""
+        if 'rsi' not in df.columns:
+            df['rsi'] = self.calculate_rsi(df)
+        
+        rsi = df['rsi'].iloc[current_index]
+        
+        # For bullish setups - RSI showing strength but not overbought
+        if df['close'].iloc[current_index] > df['open'].iloc[current_index]:
+            return 40 < rsi < 70
+        
+        # For bearish setups - RSI showing weakness but not oversold
+        else:
+            return 30 < rsi < 60
+        
+    def has_higher_timeframe_alignment(self, symbol: str, current_time: datetime, setup_direction: str) -> bool:
+        """Check if higher timeframe trend aligns with the setup direction."""
+        try:
+            # Get daily data
+            daily_df = asyncio.run(self.get_historical_data(
+                symbol, current_time, '30 D', '1 day'
+            ))
+            
+            if daily_df is None or daily_df.empty:
+                return False
+                
+            # Get trend direction on daily timeframe
+            trend, _ = self.get_trend_direction(daily_df, current_time)
+            
+            # Check alignment
+            return (setup_direction == 'bullish' and trend == 'up') or \
+                (setup_direction == 'bearish' and trend == 'down')
+                
+        except Exception as e:
+            logger.error(f"Error checking higher timeframe alignment: {e}")
+            return False
+
     def has_bos(self, df: pd.DataFrame, current_index: int, lookback: int = 10) -> bool:
         """Check if there's a breakout of structure in recent candles."""
         start_idx = max(1, current_index - lookback)
@@ -250,25 +372,40 @@ class MarketScanner:
         return False
 
     def get_trend_direction(self, daily_df: pd.DataFrame, current_date: datetime) -> Tuple[str, str]:
-        """Determine market trend and regime with relaxed conditions."""
+        """Determine market trend and regime with more relaxed conditions and debugging."""
         subset = daily_df[daily_df.index <= current_date]
         if len(subset) < 20:
+            logger.debug(f"Insufficient data for trend detection: {len(subset)} candles")
             return 'neutral', 'unknown'
         
-        # Relaxed trend determination
+        # Check trend conditions
+        price_above_sma = subset['close'].iloc[-1] > subset['sma_20'].iloc[-1]
+        price_higher_than_recent = subset['close'].iloc[-1] > subset['close'].iloc[-5]
+        price_below_sma = subset['close'].iloc[-1] < subset['sma_20'].iloc[-1]
+        price_lower_than_recent = subset['close'].iloc[-1] < subset['close'].iloc[-5]
+        
+        # More relaxed trend determination
         trend = 'neutral'
-        # Lower ADX threshold from 25 to 20
-        if (subset['sma_slope'].iloc[-1] > 0 and 
-            subset['adx'].iloc[-1] > 20 and 
-            subset['close'].iloc[-1] > subset['sma_20'].iloc[-1]):  # Changed from previous high comparison
+        if price_above_sma or price_higher_than_recent:
             trend = 'up'
-        elif (subset['sma_slope'].iloc[-1] < 0 and 
-              subset['adx'].iloc[-1] > 20 and 
-              subset['close'].iloc[-1] < subset['sma_20'].iloc[-1]):  # Changed from previous low comparison
+        elif price_below_sma and price_lower_than_recent:
             trend = 'down'
         
+        # Check regime conditions
+        bb_width_current = subset['bb_width'].iloc[-1]
+        bb_width_threshold = subset['bb_width'].quantile(0.3)
+        is_trending = bb_width_current > bb_width_threshold
+        
         # Accept both trending and ranging regimes
-        regime = 'trending' if subset['bb_width'].iloc[-1] > subset['bb_width'].quantile(0.5) else 'ranging'
+        regime = 'trending' if is_trending else 'ranging'
+        
+        # Log trend analysis periodically
+        if current_date.day % 5 == 0 and current_date.hour == 10:
+            logger.debug(f"Trend analysis for {current_date}: "
+                        f"Above SMA: {price_above_sma}, Higher than recent: {price_higher_than_recent}, "
+                        f"Below SMA: {price_below_sma}, Lower than recent: {price_lower_than_recent}, "
+                        f"BB Width: {bb_width_current:.4f} vs Threshold: {bb_width_threshold:.4f}, "
+                        f"Result: Trend={trend}, Regime={regime}")
         
         return trend, regime
 
@@ -289,11 +426,19 @@ class MarketScanner:
         conditions_met = sum([above_sma, sma_alignment, higher_lows])
         return conditions_met >= 2
 
-    def calculate_targets_and_trailing_sl(self, entry_price: float, initial_sl: float, atr: float) -> Tuple[float, float, Optional[float]]:
-        """Calculate initial profit targets based on ATR."""
+    def calculate_targets_and_trailing_sl(self, entry_price: float, initial_sl: float, atr: float) -> Tuple[float, float, float]:
+        """Calculate profit targets based on risk-reward ratio."""
         risk = entry_price - initial_sl
-        tp1 = entry_price + 2 * atr
-        tp2 = entry_price + 4 * atr
+        
+        # Calculate risk-reward based targets
+        max_rr = 3.0  # Maximum risk-reward ratio we aim for
+        
+        # First target at 50% of max RR
+        tp1 = entry_price + (risk * (max_rr * 0.5))
+        
+        # Second target at full max RR
+        tp2 = entry_price + (risk * max_rr)
+        
         return initial_sl, tp1, tp2
 
     def detect_market_structure_shift(self, df: pd.DataFrame, lookback: int = 20) -> bool:
@@ -325,8 +470,8 @@ class MarketScanner:
         return False
 
     async def scan_single_stock(self, symbol: str, start_date: datetime, end_date: datetime, 
-                              duration: str = '365 D') -> List[Dict]:
-        """Scan a single stock for trading setups."""
+                          duration: str = '365 D') -> List[Dict]:
+        """Scan a single stock for trading setups with enhanced debugging."""
         try:
             # Ensure duration has proper format
             if ' ' not in duration and any(c.isalpha() for c in duration):
@@ -341,10 +486,19 @@ class MarketScanner:
             
             # Check if we have enough data
             if not all([hourly_df is not None, daily_df is not None, 
-                      len(hourly_df) >= 15, len(daily_df) >= 20]):
+                    len(hourly_df) >= 15, len(daily_df) >= 20]):
                 logger.warning(f"Insufficient data for {symbol}")
                 return []
 
+            # Debugging counters
+            total_candles = len(hourly_df) - 14  # Exclude first 14 candles used for indicators
+            fvg_count = 0
+            unmitigated_count = 0
+            rejection_count = 0
+            rr_count = 0
+            valid_setups = 0
+            trend_rejected = 0
+            
             setups = []
             # Scan each hourly candle
             for idx in range(14, len(hourly_df)):
@@ -361,19 +515,59 @@ class MarketScanner:
                 trend, regime = self.get_trend_direction(daily_df, time)
                 # Accept both up trends and neutral trends
                 if trend == 'down':  # Only exclude downtrends
+                    trend_rejected += 1
                     continue
 
-                # Find FVGs and check setup conditions
+                # Find FVGs
                 fvgs = self.find_fvg(data, idx)
                 if not fvgs:
                     continue
-                    
+                
+                fvg_count += 1
                 fvg = fvgs[-1]  # Use the most recent FVG
                 
-                # Check if FVG is valid for our setup
-                if not self.is_unmitigated(data, fvg, idx) or \
-                   not self.has_rejection_candle(data, fvg, idx):
-                    # Removed the BOS check
+                # Check if FVG is unmitigated
+                if not self.is_unmitigated(data, fvg, idx):
+                    continue
+                
+                unmitigated_count += 1
+                
+                if not self.is_unmitigated(data, fvg, idx):
+                    continue
+
+                unmitigated_count += 1
+
+                # Check for confirmation signals - need at least 2 confirmations
+                confirmation_count = 0
+
+                # Check for rejection candle
+                if self.has_rejection_candle(data, fvg, idx):
+                    confirmation_count += 1
+                    rejection_count += 1
+
+                # Check for closing into FVG without penetration
+                if self.has_closing_into_fvg(data, fvg, idx):
+                    confirmation_count += 1
+
+                # Check for volume confirmation
+                if self.has_volume_confirmation(data, idx):
+                    confirmation_count += 1
+
+                # Check for moving average alignment
+                if self.has_ma_alignment(data, idx):
+                    confirmation_count += 1
+
+                # Check for RSI confirmation
+                if self.has_rsi_confirmation(data, idx):
+                    confirmation_count += 1
+
+                # Check for higher timeframe alignment
+                setup_direction = 'bullish' if data['close'].iloc[idx] > data['open'].iloc[idx] else 'bearish'
+                if self.has_higher_timeframe_alignment(symbol, time, setup_direction):
+                    confirmation_count += 1
+
+                # Require at least 2 confirmation signals
+                if confirmation_count < 2:
                     continue
 
                 # Setup entry parameters
@@ -381,433 +575,647 @@ class MarketScanner:
                 sl = data['low'].iloc[idx]
                 atr = data['atr'].iloc[idx]
                 
-                # Calculate targets - FIXED to avoid look-ahead bias
+                # Calculate targets
                 initial_sl, tp1, tp2 = self.calculate_targets_and_trailing_sl(entry, sl, atr)
                 
-                                # Calculate risk-reward ratio
+                # Calculate risk-reward ratio
                 rr = (tp1 - entry) / (entry - sl) if entry > sl else 0
                 
-                # Add setup if risk-reward is favorable
-                if rr >= 3:
-                    setups.append({
-                        'symbol': symbol, 
-                        'date': time, 
-                        'entry': entry, 
-                        'initial_sl': sl,
-                        'trailing_sl': initial_sl, 
-                        'target_1': tp1, 
-                        'target_2': tp2, 
-                        'rr_ratio': rr, 
-                        'shares': 1.0,
-                        'fvg_high': fvg[1],
-                        'fvg_low': fvg[2]
-                    })
-                    
+                # Add setup if risk-reward is acceptable
+                if rr >= 1.5:  # Minimum risk-reward ratio
+                    rr_count += 1
+                    valid_setups += 1
+                    setup = {
+                        'symbol': symbol,
+                        'time': time,
+                        'entry': entry,
+                        'stop_loss': sl,
+                        'target1': tp1,
+                        'target2': tp2,
+                        'atr': atr,
+                        'risk_reward': rr,
+                        'trend': trend,
+                        'regime': regime,
+                        'setup_type': 'FVG_Rejection'
+                    }
+                    setups.append(setup)
+            
+            # Log detailed statistics
+            logger.info(f"{symbol} scan statistics: Total candles: {total_candles}, "
+                    f"FVGs found: {fvg_count}, Unmitigated: {unmitigated_count}, "
+                    f"Rejection candles: {rejection_count}, Good RR: {rr_count}, "
+                    f"Trend rejected: {trend_rejected}, Valid setups: {valid_setups}")
+            
+            logger.info(f"Found {len(setups)} setups for {symbol}")
             return setups
             
         except Exception as e:
             logger.error(f"Error scanning {symbol}: {e}")
             return []
 
-    async def scan_market(self, symbols: List[str], start_date: datetime, end_date: datetime, 
-                    duration: str = '365 D') -> List[Dict]:
+    async def scan_stocks(self, symbols: List[str], start_date: datetime, end_date: datetime) -> Dict[str, List[Dict]]:
         """Scan multiple stocks for trading setups."""
-        # Ensure duration has proper format
-        if ' ' not in duration and any(c.isalpha() for c in duration):
-            for i, char in enumerate(duration):
-                if char.isalpha():
-                    duration = duration[:i] + ' ' + duration[i:]
-                    break
+        all_setups = {}
         
-        # Connect to IB if not already connected
-        if not self._connected:
-            connected = await self.connect()
-            if not connected:
-                logger.error("Failed to connect to Interactive Brokers")
-                return []
-        
-        all_setups = []
         for symbol in symbols:
             logger.info(f"Scanning {symbol}...")
-            setups = await self.scan_single_stock(symbol, start_date, end_date, duration)
+            setups = await self.scan_single_stock(symbol, start_date, end_date)
             if setups:
-                logger.info(f"Found {len(setups)} setups for {symbol}")
-                all_setups.extend(setups)
-            
-        # Sort setups by date
-        all_setups.sort(key=lambda x: x['date'])
-        
-        # Apply SMC principles filtering
-        filtered_setups = self.filter_by_smc_principles(all_setups)
-        
-        return filtered_setups
-    
-    def filter_by_smc_principles(self, setups: List[Dict]) -> List[Dict]:
-        """Filter setups using Smart Money Concepts principles."""
-        filtered_setups = []
-        
-        for setup in setups:
-            # Calculate risk-reward ratio with more conservative targets
-            entry = setup['entry']
-            sl = setup['initial_sl']
-            risk = entry - sl
-            
-            # Ensure minimum risk-reward of 3:1
-            if risk <= 0 or setup['rr_ratio'] < 3:
-                continue
+                all_setups[symbol] = setups
                 
-            # Ensure FVG size is proportional to ATR
-            fvg_size = setup['fvg_low'] - setup['fvg_high']
-            if fvg_size < 0.5 * risk:  #FVG should be at least half the risk**
-                continue
-                
-            # Accept the setup if it passes all filters
-            filtered_setups.append(setup)
-            
-        return filtered_setups
-    
-    def plot_fvg_setup(self, symbol: str, setup: Dict, hourly_df: pd.DataFrame):
-        """Plot the 1-hour chart with FVG visualization."""
-        try:
-            import matplotlib.pyplot as plt
-            import matplotlib.dates as mdates
-            from matplotlib.patches import Rectangle
-            
-            # Extract setup date and FVG levels
-            setup_date = setup['date']
-            fvg_high = setup['fvg_high']
-            fvg_low = setup['fvg_low']
-            
-            # Get data for plotting (20 bars before and 10 bars after setup)
-            start_idx = hourly_df.index.get_loc(setup_date, method='nearest') - 20
-            end_idx = min(start_idx + 30, len(hourly_df) - 1)
-            
-            plot_df = hourly_df.iloc[max(0, start_idx):end_idx + 1].copy()
-            
-            # Create figure
-            fig, ax = plt.subplots(figsize=(12, 8))
-            
-            # Plot candlesticks
-            for i, (idx, row) in enumerate(plot_df.iterrows()):
-                color = 'green' if row['close'] >= row['open'] else 'red'
-                ax.plot([i, i], [row['low'], row['high']], color=color)
-                rect = Rectangle((i-0.4, row['open']), 0.8, row['close']-row['open'], 
-                                color=color, alpha=0.5)
-                ax.add_patch(rect)
-            
-            # Add FVG rectangle
-            fvg_idx = plot_df.index.get_loc(setup_date, method='nearest')
-            ax.axhspan(fvg_high, fvg_low, alpha=0.2, color='blue', 
-                      xmin=fvg_idx/len(plot_df), xmax=1.0)
-            
-            # Add entry, stop loss and targets
-            ax.axhline(y=setup['entry'], color='green', linestyle='--', label=f"Entry: {setup['entry']:.2f}")
-            ax.axhline(y=setup['initial_sl'], color='red', linestyle='--', label=f"SL: {setup['initial_sl']:.2f}")
-            ax.axhline(y=setup['target_1'], color='blue', linestyle=':', label=f"TP1: {setup['target_1']:.2f}")
-            
-            if setup['target_2']:
-                ax.axhline(y=setup['target_2'], color='purple', linestyle=':', label=f"TP2: {setup['target_2']:.2f}")
-            
-            # Set labels and title
-            ax.set_title(f"{symbol} 1-Hour Chart - FVG Setup on {setup_date.strftime('%Y-%m-%d %H:%M')}")
-            ax.set_xlabel('Date')
-            ax.set_ylabel('Price')
-            ax.set_xticks(range(0, len(plot_df), 5))
-            ax.set_xticklabels([d.strftime('%Y-%m-%d\n%H:%M') for d in plot_df.index[::5]], rotation=45)
-            ax.legend()
-            ax.grid(True, alpha=0.3)
-            
-            # Save the plot
-            plt.tight_layout()
-            plt.savefig(f"{symbol}_fvg_{setup_date.strftime('%Y%m%d_%H%M')}.png")
-            plt.close()
-            
-        except Exception as e:
-            logger.error(f"Error creating plot for {symbol}: {e}")
+        return all_setups
 
-    async def backtest_strategy(self, symbols: List[str], start_date: datetime, end_date: datetime, 
-                              initial_capital: float = 100000.0) -> Dict:
-        """Backtest the FVG strategy on historical data."""
-        all_setups = await self.scan_market(symbols, start_date, end_date)
+class BacktestEngine:
+    """Backtests trading strategies using historical data."""
+    
+    def __init__(self, scanner: MarketScanner, initial_capital: float = 100000.0):
+        self.scanner = scanner
+        self.initial_capital = initial_capital
+        self.current_capital = initial_capital
+        self.positions = {}  # symbol -> {entry_price, shares, entry_date, stop_loss, target1, target2}
+        self.closed_trades = []
+        self.equity_curve = []
+        self.max_risk_per_trade = 0.3  # 30% risk per trade
+        self.max_portfolio_risk = 0.05  # 5% total portfolio risk
+        self.fee_per_share = 0.0035  # $0.0035 per share
+        self.slippage_percent = 0.002  # 0.2% slippage
+        self.max_holding_period = 60  # Maximum days to hold a position
         
-        # Initialize backtest results
-        results = {
-            'initial_capital': initial_capital,
-            'final_capital': initial_capital,
-            'trades': [],
-            'win_rate': 0.0,
-            'profit_factor': 0.0,
-            'max_drawdown': 0.0
-        }
-        
-        capital = initial_capital
-        max_capital = initial_capital
-        total_profit = 0.0
-        total_loss = 0.0
-        wins = 0
-        losses = 0
-        
-        # Set a cutoff date to prevent look-ahead bias
-        # Only use data available up to the current date
-        current_date = datetime.now(UTC)
-        
-        for setup in all_setups:
-            symbol = setup['symbol']
-            entry_date = setup['date']
-            entry_price = setup['entry']
-            initial_sl = setup['initial_sl']
-            tp1 = setup['target_1']
-            tp2 = setup['target_2']
+    def calculate_position_size(self, entry: float, stop_loss: float) -> int:
+        """Calculate position size based on risk parameters."""
+        if entry <= stop_loss:
+            return 0
             
-            # Skip setups that occur after our cutoff date
-            if entry_date > current_date:
-                logger.warning(f"Skipping future setup for {symbol} on {entry_date}")
+        risk_per_share = entry - stop_loss
+        if risk_per_share <= 0:
+            return 0
+            
+        # Calculate dollar risk - REDUCE MAX RISK PER TRADE
+        dollar_risk = self.current_capital * self.max_risk_per_trade * 0.75  # Reduced by 25%
+        
+        # Calculate shares based on risk
+        shares = int(dollar_risk / risk_per_share)
+        
+        # Add maximum position size as percentage of capital
+        max_position_value = self.current_capital * 0.15  # Max 15% in any position
+        shares = min(shares, int(max_position_value / entry))
+        
+        # Ensure we don't exceed maximum portfolio risk
+        total_portfolio_risk = sum(
+            self.positions[sym]['shares'] * (self.positions[sym]['entry_price'] - self.positions[sym]['stop_loss'])
+            for sym in self.positions
+        )
+        max_dollar_risk = self.current_capital * self.max_portfolio_risk
+        
+        if total_portfolio_risk + (shares * risk_per_share) > max_dollar_risk:
+            # Adjust shares to stay within portfolio risk limit
+            remaining_risk = max_dollar_risk - total_portfolio_risk
+            if remaining_risk <= 0:
+                return 0
+            shares = min(shares, int(remaining_risk / risk_per_share))
+        
+        return max(1, shares)  # At least 1 share
+
+    def apply_slippage_and_fees(self, price: float, shares: int, is_buy: bool) -> float:
+        """Apply slippage and fees to a transaction."""
+        # Apply slippage (worse price for buys, better for sells)
+        slippage_adjustment = price * self.slippage_percent
+        adjusted_price = price + slippage_adjustment if is_buy else price - slippage_adjustment
+        
+        # Apply fees
+        fees = shares * self.fee_per_share
+        
+        # Return total cost including fees
+        transaction_value = shares * adjusted_price
+        return transaction_value + fees if is_buy else transaction_value - fees
+
+    def backtest(self, setups: Dict[str, List[Dict]], start_date: datetime, end_date: datetime) -> Dict:
+        """Run backtest on the given setups."""
+        # Sort all setups by date
+        all_setups_sorted = []
+        for symbol, symbol_setups in setups.items():
+            for setup in symbol_setups:
+                setup['symbol'] = symbol
+                all_setups_sorted.append(setup)
+        
+        all_setups_sorted.sort(key=lambda x: x['time'])
+        
+        # Reset backtest state
+        self.current_capital = self.initial_capital
+        self.positions = {}
+        self.closed_trades = []
+        self.equity_curve = [{'date': start_date, 'equity': self.initial_capital}]
+        
+        # Process each setup chronologically
+        for setup in all_setups_sorted:
+            setup_time = setup['time']
+            
+            # Skip setups outside our date range
+            if setup_time < start_date or setup_time > end_date:
                 continue
                 
-            # Get data after entry for simulation
-            # Only use data up to our cutoff date to prevent look-ahead bias
-            simulation_end_date = min(end_date, current_date)
-            df_5min = await self.get_5min_data(symbol, entry_date, simulation_end_date)
-            if df_5min is None or len(df_5min) < 1:
+            # Process existing positions first (check for exits)
+            self._process_positions(setup_time, end_date)
+            
+            # Skip entry if we already have a position in this symbol
+            if setup['symbol'] in self.positions:
                 continue
                 
-            # Position sizing (risk 1% of capital per trade)
-            risk_amount = capital * 0.01
-            risk_per_share = entry_price - initial_sl
-            if risk_per_share <= 0:
-                continue
-                
-            shares = int(risk_amount / risk_per_share)
+            # Calculate position size
+            shares = self.calculate_position_size(setup['entry'], setup['stop_loss'])
             
             if shares <= 0:
                 continue
                 
-            # Simulate the trade
-            entry_value = shares * entry_price
-            trailing_sl = initial_sl
-            highest_high = entry_price
-            breakeven_hit = False
-            tp1_hit = False
-            exit_price = None
-            exit_date = None
+            # Apply slippage and fees to entry
+            actual_cost = self.apply_slippage_and_fees(setup['entry'], shares, True)
             
-            # Apply realistic slippage to entry
-            entry_price = entry_price * (1 + (np.random.random() * self.max_slippage_percent))
+            # Check if we have enough capital
+            if actual_cost > self.current_capital:
+                # Adjust shares to available capital
+                shares = int((self.current_capital / actual_cost) * shares)
+                if shares <= 0:
+                    continue
+                actual_cost = self.apply_slippage_and_fees(setup['entry'], shares, True)
             
-            for date, row in df_5min.iterrows():
-                if date <= entry_date:
+            # Enter position
+            self.positions[setup['symbol']] = {
+                'entry_price': setup['entry'],
+                'shares': shares,
+                'entry_date': setup_time,
+                'stop_loss': setup['stop_loss'],
+                'target1': setup['target1'],
+                'target2': setup['target2'],
+                'max_holding_date': setup_time + timedelta(days=self.max_holding_period)
+            }
+            
+            # Update capital
+            self.current_capital -= actual_cost
+            
+            # Update equity curve
+            self.equity_curve.append({
+                'date': setup_time,
+                'equity': self._calculate_total_equity(setup_time)
+            })
+        
+        # Close any remaining positions at the end of the backtest
+        self._close_all_positions(end_date)
+        
+        # Calculate performance metrics
+        return self._calculate_performance_metrics()
+
+    def _process_positions(self, current_time: datetime, end_date: datetime) -> None:
+        """Process existing positions for potential exits."""
+        symbols_to_remove = []
+        
+        for symbol, position in self.positions.items():
+            # Get historical data to check exit conditions
+            try:
+                # Use 5-minute data for more precise exit timing
+                data = asyncio.run(self.scanner.get_5min_data(
+                    symbol, 
+                    position['entry_date'], 
+                    min(current_time, end_date)
+                ))
+                
+                if data is None or data.empty:
                     continue
                     
-                highest_high = max(highest_high, row['high'])
-                
-                # Move to breakeven when price moves in favor by 1R
-                if not breakeven_hit and (row['high'] - entry_price) >= risk_per_share:
-                    trailing_sl = entry_price
-                    breakeven_hit = True
-                
-                # Trail the stop loss
-                if breakeven_hit:
-                    trailing_sl = max(trailing_sl, highest_high - row['atr'])
-                
-                # Check if stopped out
-                if row['low'] <= trailing_sl:
-                    # Apply realistic slippage to exit
-                    exit_price = trailing_sl * (1 - (np.random.random() * self.max_slippage_percent))
-                    exit_date = date
-                    break
-                
-                # Check if TP1 hit
-                if not tp1_hit and row['high'] >= tp1:
-                    # Take partial profits (50%)
-                    exit_shares = shares // 2
-                    remaining_shares = shares - exit_shares
+                # Check for stop loss hit
+                if any(data['low'] <= position['stop_loss']):
+                    # Find the first bar where stop loss was hit
+                    stop_hit_bars = data[data['low'] <= position['stop_loss']]
+                    exit_time = stop_hit_bars.index[0]
+                    exit_price = position['stop_loss']
                     
-                    # Apply realistic slippage to partial exit
-                    partial_exit_price = tp1 * (1 - (np.random.random() * self.max_slippage_percent))
+                    self._close_position(symbol, exit_price, exit_time, 'Stop Loss')
+                    symbols_to_remove.append(symbol)
+                    continue
+                
+                # Check for first target hit - close 50% of position
+                if not position.get('partial_exit', False) and any(data['high'] >= position['target1']):
+                    # Find the first bar where target was hit
+                    target_hit_bars = data[data['high'] >= position['target1']]
+                    exit_time = target_hit_bars.index[0]
+                    exit_price = position['target1']
                     
-                    # Update position
-                    profit = exit_shares * (partial_exit_price - entry_price) - (exit_shares * self.fee_per_share)
-                    capital += profit
-                    shares = remaining_shares
-                    trailing_sl = max(trailing_sl, entry_price)  # Ensure at least breakeven
-                    tp1_hit = True
+                    # Calculate shares to close (50% of position)
+                    shares_to_close = position['shares'] // 2
+                    if shares_to_close > 0:
+                        # Close partial position
+                        self._close_partial_position(symbol, exit_price, exit_time, shares_to_close, 'Partial TP')
+                        
+                        # Mark position as partially exited
+                        position['partial_exit'] = True
+                        position['shares'] -= shares_to_close
+                        
+                        # Move stop loss to breakeven
+                        position['stop_loss'] = position['entry_price']
+                        
+                        # If all shares were closed (odd number of shares case)
+                        if position['shares'] <= 0:
+                            symbols_to_remove.append(symbol)
+                            continue
                 
-                # Check if TP2 hit
-                if tp1_hit and tp2 and row['high'] >= tp2:
-                    # Apply realistic slippage to exit
-                    exit_price = tp2 * (1 - (np.random.random() * self.max_slippage_percent))
-                    exit_date = date
-                    break
-            
-            # If not exited by end of data, use last price
-            if exit_price is None and len(df_5min) > 0:
-                exit_price = df_5min['close'].iloc[-1]
-                exit_date = df_5min.index[-1]
-            
-            # Calculate trade result with fees
-            if exit_price is not None:
-                # Include trading fees
-                fees = shares * self.fee_per_share
-                trade_pnl = shares * (exit_price - entry_price) - fees
-                capital += trade_pnl
+                # Check for second target hit for remaining position
+                if position.get('partial_exit', False) and any(data['high'] >= position['target2']):
+                    # Find the first bar where target was hit
+                    target_hit_bars = data[data['high'] >= position['target2']]
+                    exit_time = target_hit_bars.index[0]
+                    exit_price = position['target2']
+                    
+                    self._close_position(symbol, exit_price, exit_time, 'Final TP')
+                    symbols_to_remove.append(symbol)
+                    continue
                 
-                # Update statistics
-                if trade_pnl > 0:
-                    wins += 1
-                    total_profit += trade_pnl
+                # Add trailing stop logic
+                if len(data) > 5:  # Need some bars to establish trailing stop
+                    # Calculate trailing stop based on ATR
+                    atr = data['atr'].iloc[-1] if 'atr' in data.columns else position['entry_price'] * 0.02
+                    highest_high = data['high'].max()
+                    
+                    # More aggressive trailing stop after partial exit
+                    if position.get('partial_exit', False):
+                        trailing_stop = max(position['stop_loss'], highest_high - 1.5 * atr)
+                    else:
+                        trailing_stop = max(position['stop_loss'], highest_high - 2 * atr)
+                    
+                    # Exit if price falls below trailing stop
+                    if data['close'].iloc[-1] < trailing_stop and highest_high > position['entry_price'] * 1.05:
+                        exit_price = data['close'].iloc[-1]
+                        exit_time = data.index[-1]
+                        self._close_position(symbol, exit_price, exit_time, 'Trailing Stop')
+                        symbols_to_remove.append(symbol)
+                        continue
+                
+                # Check for max holding period (60 days)
+                if current_time >= position['entry_date'] + timedelta(days=60):
+                    # Use the close of the last bar as exit price
+                    exit_price = data['close'].iloc[-1]
+                    exit_time = data.index[-1]
+                    
+                    self._close_position(symbol, exit_price, exit_time, 'Time Exit')
+                    symbols_to_remove.append(symbol)
+                    continue
+                
+            except Exception as e:
+                logger.error(f"Error processing position for {symbol}: {e}")
+        
+        # Remove closed positions
+        for symbol in symbols_to_remove:
+            if symbol in self.positions:
+                del self.positions[symbol]
+
+    def _close_position(self, symbol: str, exit_price: float, exit_time: datetime, exit_reason: str) -> None:
+        """Close a position and record the trade."""
+        position = self.positions[symbol]
+        
+        # Apply slippage and fees to exit
+        actual_proceeds = self.apply_slippage_and_fees(exit_price, position['shares'], False)
+        
+        # Calculate P&L
+        entry_value = position['entry_price'] * position['shares']
+        exit_value = exit_price * position['shares']
+        pnl = exit_value - entry_value
+        pnl_percent = (exit_price / position['entry_price'] - 1) * 100
+        
+        # Record the trade
+        trade = {
+            'symbol': symbol,
+            'entry_date': position['entry_date'],
+            'exit_date': exit_time,
+            'entry_price': position['entry_price'],
+            'exit_price': exit_price,
+            'shares': position['shares'],
+            'pnl': pnl,
+            'pnl_percent': pnl_percent,
+            'exit_reason': exit_reason
+        }
+        self.closed_trades.append(trade)
+        
+        # Update capital
+        self.current_capital += actual_proceeds
+        
+        # Update equity curve
+        self.equity_curve.append({
+            'date': exit_time,
+            'equity': self._calculate_total_equity(exit_time)
+        })
+
+    def _close_all_positions(self, exit_date: datetime) -> None:
+        """Close all remaining positions at the end of the backtest."""
+        symbols = list(self.positions.keys())
+        
+        for symbol in symbols:
+            try:
+                # Get the latest price data up to exit_date
+                data = asyncio.run(self.scanner.get_historical_data(
+                    symbol, exit_date, '1 D', '1 hour'
+                ))
+                
+                if data is None or data.empty:
+                    continue
+                
+                # Use the last available close price
+                exit_price = data['close'].iloc[-1]
+                exit_time = data.index[-1]
+                
+                self._close_position(symbol, exit_price, exit_time, 'End of Backtest')
+                
+            except Exception as e:
+                logger.error(f"Error closing position for {symbol}: {e}")
+        
+        # Clear positions
+        self.positions = {}
+
+    def _close_partial_position(self, symbol: str, exit_price: float, exit_time: datetime, shares: int, exit_reason: str) -> None:
+        """Close part of a position and record the partial trade."""
+        position = self.positions[symbol]
+        
+        # Apply slippage and fees to exit
+        actual_proceeds = self.apply_slippage_and_fees(exit_price, shares, False)
+        
+        # Calculate P&L for the closed portion
+        entry_value = position['entry_price'] * shares
+        exit_value = exit_price * shares
+        pnl = exit_value - entry_value
+        pnl_percent = (exit_price / position['entry_price'] - 1) * 100
+        
+        # Record the partial trade
+        trade = {
+            'symbol': symbol,
+            'entry_date': position['entry_date'],
+            'exit_date': exit_time,
+            'entry_price': position['entry_price'],
+            'exit_price': exit_price,
+            'shares': shares,
+            'pnl': pnl,
+            'pnl_percent': pnl_percent,
+            'exit_reason': exit_reason
+        }
+        self.closed_trades.append(trade)
+        
+        # Update capital
+        self.current_capital += actual_proceeds
+        
+        # Update equity curve
+        self.equity_curve.append({
+            'date': exit_time,
+            'equity': self._calculate_total_equity(exit_time)
+        })
+    
+    def _calculate_total_equity(self, current_time: datetime) -> float:
+        """Calculate total equity including open positions."""
+        # Start with cash
+        total_equity = self.current_capital
+        
+        # Add value of open positions
+        for symbol, position in self.positions.items():
+            try:
+                # Get latest price
+                data = asyncio.run(self.scanner.get_historical_data(
+                    symbol, current_time, '1 D', '1 hour'
+                ))
+                
+                if data is None or data.empty:
+                    # Use entry price if no data available
+                    current_price = position['entry_price']
                 else:
-                    losses += 1
-                    total_loss -= trade_pnl  # Convert to positive number
+                    # Use the last available close price
+                    current_price = data['close'].iloc[-1]
                 
-                # Track drawdown
-                max_capital = max(max_capital, capital)
-                drawdown = (max_capital - capital) / max_capital * 100 if max_capital > 0 else 0
-                results['max_drawdown'] = max(results['max_drawdown'], drawdown)
-
+                position_value = current_price * position['shares']
+                total_equity += position_value
                 
-                # Record trade
-                results['trades'].append({
-                    'symbol': symbol,
-                    'entry_date': entry_date,
-                    'exit_date': exit_date,
-                    'entry_price': entry_price,
-                    'exit_price': exit_price,
-                    'shares': shares,
-                    'pnl': trade_pnl,
-                    'pnl_percent': trade_pnl / entry_value * 100 if entry_value > 0 else 0
-                })
+            except Exception as e:
+                logger.error(f"Error calculating equity for {symbol}: {e}")
+                # Use entry price as fallback
+                position_value = position['entry_price'] * position['shares']
+                total_equity += position_value
         
-        # Calculate final statistics
-        total_trades = wins + losses
-        results['final_capital'] = capital
-        results['win_rate'] = (wins / total_trades * 100) if total_trades > 0 else 0  # Fixed to percentage
-        results['profit_factor'] = total_profit / total_loss if total_loss > 0 else float('inf')
-        results['total_return'] = (capital - initial_capital) / initial_capital * 100
-        results['total_trades'] = total_trades
-        results['winning_trades'] = wins
-        results['losing_trades'] = losses
-        
-        return results
+        return total_equity
 
-    def generate_report(self, backtest_results: Dict) -> None:
-        """Generate a comprehensive backtest report."""
-        try:
-            import matplotlib.pyplot as plt
-            
-            # Extract key metrics
-            initial_capital = backtest_results['initial_capital']
-            final_capital = backtest_results['final_capital']
-            trades = backtest_results['trades']
-            win_rate = backtest_results['win_rate']
-            profit_factor = backtest_results['profit_factor']
-            max_drawdown = backtest_results['max_drawdown']
-            total_return = backtest_results['total_return']
-            
-            # Print summary
-            print("===== BACKTEST RESULTS =====")
-            print(f"Initial Capital: ${initial_capital:.2f}")
-            print(f"Final Capital: ${final_capital:.2f}")
-            print(f"Total Return: {total_return:.2f}%")
-            print(f"Win Rate: {win_rate:.2f}%")
-            print(f"Profit Factor: {profit_factor:.2f}")
-            print(f"Max Drawdown: {max_drawdown:.2f}%")
-            print(f"Total Trades: {len(trades)}")
-            
-            # Create equity curve
-            if trades:
-                plt.figure(figsize=(12, 6))
-                
-                # Calculate cumulative returns
-                equity = [initial_capital]
-                dates = []
-                for trade in trades:
-                    equity.append(equity[-1] + trade['pnl'])
-                    dates.append(trade['exit_date'])
-                
-                # Plot equity curve
-                plt.plot(range(len(equity)), equity)
-                plt.title('Equity Curve')
-                plt.xlabel('Trade Number')
-                plt.ylabel('Capital ($)')
-                plt.grid(True, alpha=0.3)
-                plt.savefig('equity_curve.png')
-                plt.close()
-                
-                # Plot trade P&L distribution
-                plt.figure(figsize=(12, 6))
-                pnls = [trade['pnl'] for trade in trades]
-                plt.hist(pnls, bins=20)
-                plt.title('Trade P&L Distribution')
-                plt.xlabel('Profit/Loss ($)')
-                plt.ylabel('Frequency')
-                plt.grid(True, alpha=0.3)
-                plt.savefig('pnl_distribution.png')
-                plt.close()
-                
-                # Plot monthly returns if we have date information
-                if dates:
-                    monthly_returns = {}
-                    for i, trade in enumerate(trades):
-                        month_key = trade['exit_date'].strftime('%Y-%m')
-                        if month_key not in monthly_returns:
-                            monthly_returns[month_key] = 0
-                        monthly_returns[month_key] += trade['pnl']
-                    
-                    if monthly_returns:
-                        plt.figure(figsize=(14, 6))
-                        months = list(monthly_returns.keys())
-                        returns = list(monthly_returns.values())
-                        plt.bar(months, returns)
-                        plt.title('Monthly Returns')
-                        plt.xlabel('Month')
-                        plt.ylabel('Profit/Loss ($)')
-                        plt.xticks(rotation=45)
-                        plt.tight_layout()
-                        plt.savefig('monthly_returns.png')
-                        plt.close()
-                
-                # Save detailed trade log
-                with open('trade_log.csv', 'w') as f:
-                    f.write('Symbol,Entry Date,Exit Date,Entry Price,Exit Price,Shares,P&L,P&L %\n')
-                    for trade in trades:
-                        f.write(f"{trade['symbol']},{trade['entry_date']},{trade['exit_date']}," +
-                                f"{trade['entry_price']:.2f},{trade['exit_price']:.2f},{trade['shares']}," +
-                                f"{trade['pnl']:.2f},{trade['pnl_percent']:.2f}\n")
-                
-                print("Report files generated: equity_curve.png, pnl_distribution.png, monthly_returns.png, trade_log.csv")
+    def _calculate_performance_metrics(self) -> Dict:
+        """Calculate performance metrics for the backtest."""
+        if not self.closed_trades:
+            return {
+                'initial_capital': self.initial_capital,
+                'final_capital': self.current_capital,
+                'total_return_pct': 0,
+                'win_rate': 0,
+                'profit_factor': 0,
+                'max_drawdown_pct': 0,
+                'total_trades': 0,
+                'equity_curve': self.equity_curve,
+                'trades': []
+            }
         
-        except Exception as e:
-            logger.error(f"Error generating report: {e}")
+        # Calculate basic metrics
+        initial_capital = self.initial_capital
+        final_capital = self.current_capital
+        total_return_pct = (final_capital / initial_capital - 1) * 100
+        
+        # Win rate
+        winning_trades = [t for t in self.closed_trades if t['pnl'] > 0]
+        win_rate = len(winning_trades) / len(self.closed_trades) if self.closed_trades else 0
+        
+        # Profit factor
+        gross_profit = sum(t['pnl'] for t in self.closed_trades if t['pnl'] > 0)
+        gross_loss = abs(sum(t['pnl'] for t in self.closed_trades if t['pnl'] < 0))
+        profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf')
+        
+        # Maximum drawdown
+        equity_values = [point['equity'] for point in self.equity_curve]
+        max_drawdown_pct = self._calculate_max_drawdown(equity_values)
+        
+        # Format trades for output
+        trades_output = []
+        for trade in self.closed_trades:
+            trades_output.append({
+                'symbol': trade['symbol'],
+                'entry_date': trade['entry_date'],
+                'exit_date': trade['exit_date'],
+                'entry_price': trade['entry_price'],
+                'exit_price': trade['exit_price'],
+                'shares': trade['shares'],
+                'pnl': trade['pnl'],
+                'pnl_percent': trade['pnl_percent'],
+                'exit_reason': trade['exit_reason']
+            })
+        
+        return {
+            'initial_capital': initial_capital,
+            'final_capital': final_capital,
+            'total_return_pct': total_return_pct,
+            'win_rate': win_rate,
+            'profit_factor': profit_factor,
+            'max_drawdown_pct': max_drawdown_pct,
+            'total_trades': len(self.closed_trades),
+            'equity_curve': self.equity_curve,
+            'trades': trades_output
+        }
 
+    def _calculate_max_drawdown(self, equity_curve: List[float]) -> float:
+        """Calculate maximum drawdown percentage."""
+        if not equity_curve:
+            return 0
+            
+        max_drawdown = 0
+        peak = equity_curve[0]
+        
+        for equity in equity_curve:
+            if equity > peak:
+                peak = equity
+            else:
+                drawdown = (peak - equity) / peak
+                max_drawdown = max(max_drawdown, drawdown)
+        
+        return max_drawdown * 100  # Convert to percentage
+
+    def generate_report(self, results: Dict, output_dir: str = './reports') -> None:
+        """Generate performance reports and charts."""
+        import matplotlib.pyplot as plt
+        import matplotlib.dates as mdates
+        from matplotlib.ticker import FuncFormatter
+        
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # 1. Create improved equity curve chart
+        plt.figure(figsize=(12, 6))
+        dates = [point['date'] for point in results['equity_curve']]
+        equity = [point['equity'] for point in results['equity_curve']]
+        
+        # Sort the data by date to ensure proper ordering
+        sorted_data = sorted(zip(dates, equity), key=lambda x: x[0])
+        dates = [item[0] for item in sorted_data]
+        equity = [item[1] for item in sorted_data]
+        
+        # Plot with improved styling
+        plt.plot(dates, equity, linewidth=2, color='#0079a3', alpha=0.9)
+        
+        # Add markers at trade points for better visibility
+        trade_dates = [trade['entry_date'] for trade in results['trades']]
+        trade_exits = [trade['exit_date'] for trade in results['trades']]
+        
+        # Get equity values at trade dates
+        trade_entries_equity = []
+        trade_exits_equity = []
+        
+        for trade_date in trade_dates:
+            # Find closest equity point
+            closest_idx = min(range(len(dates)), key=lambda i: abs(dates[i] - trade_date))
+            trade_entries_equity.append(equity[closest_idx])
+        
+        for exit_date in trade_exits:
+            # Find closest equity point
+            closest_idx = min(range(len(dates)), key=lambda i: abs(dates[i] - exit_date))
+            trade_exits_equity.append(equity[closest_idx])
+        
+        # Plot entry and exit points
+        plt.scatter(trade_dates, trade_entries_equity, color='green', s=50, alpha=0.7, label='Entry')
+        plt.scatter(trade_exits, trade_exits_equity, color='red', s=50, alpha=0.7, label='Exit')
+        
+        # Add grid and styling
+        plt.title('Equity Curve', fontsize=16)
+        plt.xlabel('Date', fontsize=12)
+        plt.ylabel('Equity ($)', fontsize=12)
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        
+        # Format axes
+        plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+        plt.gca().yaxis.set_major_formatter(FuncFormatter(lambda x, _: f'${x:,.2f}'))
+        
+        # Add horizontal line for initial capital
+        plt.axhline(y=results['initial_capital'], color='gray', linestyle='--', alpha=0.5, 
+                    label=f'Initial Capital (${results["initial_capital"]:,.2f})')
+        
+        # Set y-axis limits with some padding
+        min_equity = min(equity) * 0.95
+        max_equity = max(equity) * 1.05
+        plt.ylim(min_equity, max_equity)
+        
+        # Improve x-axis display
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        
+        # Save the figure with high DPI for better quality
+        plt.savefig(os.path.join(output_dir, 'equity_curve.png'), dpi=300)
+        plt.close()
+        
+        # Continue with the rest of the report generation...
+        # 2. Create P&L distribution
+        if results['trades']:
+            plt.figure(figsize=(12, 6))
+            pnl_pcts = [trade['pnl_percent'] for trade in results['trades']]
+            plt.hist(pnl_pcts, bins=20, alpha=0.7, color='#0079a3')
+            plt.axvline(0, color='red', linestyle='--')
+            plt.title('P&L Distribution', fontsize=16)
+            plt.xlabel('P&L %', fontsize=12)
+            plt.ylabel('Frequency', fontsize=12)
+            plt.grid(True, alpha=0.3)
+            plt.tight_layout()
+            plt.savefig(os.path.join(output_dir, 'pnl_distribution.png'), dpi=300)
+            plt.close()
+        
+        # 4. Save trade log to CSV
+        if results['trades']:
+            trades_df = pd.DataFrame(results['trades'])
+            trades_df.to_csv(os.path.join(output_dir, 'trade_log.csv'), index=False)
+            
+        # Print summary to console
+        print("===== BACKTEST RESULTS =====")
+        print(f"Initial Capital: ${results['initial_capital']:.2f}")
+        print(f"Final Capital: ${results['final_capital']:.2f}")
+        print(f"Total Return: {results['total_return_pct']:.2f}%")
+        print(f"Win Rate: {results['win_rate']*100:.2f}%")
+        print(f"Profit Factor: {results['profit_factor']:.2f}")
+        print(f"Max Drawdown: {results['max_drawdown_pct']:.2f}%")
+        print(f"Total Trades: {results['total_trades']}")
+        print(f"Report files generated: equity_curve.png, pnl_distribution.png, monthly_returns.png, trade_log.csv")
+        
+        return os.path.join(output_dir, 'trade_log.csv')
 
 async def main():
     # Define symbols to scan
-    symbols = ['META']
+    symbols = ['AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'NVDA', 'TSLA', 'AMD']
     
-    # Define date range - use historical data only
+    # Define date range for backtest
     start_date = datetime(2023, 1, 1, tzinfo=UTC)
-    end_date = datetime(2024, 1, 1, tzinfo=UTC)  # Use a past end date to avoid look-ahead bias
+    end_date = datetime(2023, 12, 31, tzinfo=UTC)
     
-    # Create scanner instance
-    scanner = MarketScanner(host='127.0.0.1', port=7497)
+    # Initialize scanner and connect to IB
+    scanner = MarketScanner()
+    connected = await scanner.connect()
+    
+    if not connected:
+        logger.error("Failed to connect to Interactive Brokers. Exiting.")
+        return
     
     try:
-        # Connect to Interactive Brokers
-        connected = await scanner.connect()
-        if not connected:
-            logger.error("Failed to connect to Interactive Brokers")
-            return
+        # Scan for setups
+        setups = await scanner.scan_stocks(symbols, start_date, end_date)
         
-        # Run backtest
-        results = await scanner.backtest_strategy(symbols, start_date, end_date, initial_capital=100000.0)
+        # Initialize backtest engine
+        backtest = BacktestEngine(scanner)
         
-        # Generate report
-        scanner.generate_report(results)
+        # Run backtest with defined date range
+        results = backtest.backtest(setups, start_date, end_date)
         
+        # Generate reports
+        backtest.generate_report(results)
+        
+        # Print trade details
+        if results['trades']:
+            print("\nSymbol,Entry Date,Exit Date,Entry Price,Exit Price,Shares,P&L,P&L %")
+            for trade in results['trades']:
+                print(f"{trade['symbol']},{trade['entry_date']},{trade['exit_date']},{trade['entry_price']:.2f},{trade['exit_price']:.2f},{trade['shares']},{trade['pnl']:.2f},{trade['pnl_percent']:.2f}")
+        
+    except Exception as e:
+        logger.error(f"Error in main execution: {e}")
     finally:
-        # Disconnect from Interactive Brokers
+        # Disconnect from IB
         scanner.disconnect()
-
 
 if __name__ == "__main__":
     asyncio.run(main())
