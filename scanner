@@ -388,7 +388,7 @@ class MarketScanner:
                 rr = (tp1 - entry) / (entry - sl) if entry > sl else 0
                 
                 # Add setup if risk-reward is favorable
-                if rr >= 1.5:  # Changed from 2 to 1.5
+                if rr >= 3:
                     setups.append({
                         'symbol': symbol, 
                         'date': time, 
@@ -452,13 +452,13 @@ class MarketScanner:
             sl = setup['initial_sl']
             risk = entry - sl
             
-            # Ensure minimum risk-reward of 1.5:1
-            if risk <= 0 or setup['rr_ratio'] < 1.5:
+            # Ensure minimum risk-reward of 3:1
+            if risk <= 0 or setup['rr_ratio'] < 3:
                 continue
                 
             # Ensure FVG size is proportional to ATR
             fvg_size = setup['fvg_low'] - setup['fvg_high']
-            if fvg_size < 0.3 * risk:  #**FVG should be at least half the risk**
+            if fvg_size < 0.5 * risk:  #FVG should be at least half the risk**
                 continue
                 
             # Accept the setup if it passes all filters
@@ -661,8 +661,9 @@ class MarketScanner:
                 
                 # Track drawdown
                 max_capital = max(max_capital, capital)
-                drawdown = (max_capital - capital) / max_capital if max_capital > 0 else 0
+                drawdown = (max_capital - capital) / max_capital * 100 if max_capital > 0 else 0
                 results['max_drawdown'] = max(results['max_drawdown'], drawdown)
+
                 
                 # Record trade
                 results['trades'].append({
@@ -781,7 +782,7 @@ class MarketScanner:
 
 async def main():
     # Define symbols to scan
-    symbols = ['AAPL', 'MSFT', 'AMZN', 'GOOGL', 'META', 'TSLA', 'NVDA', 'AMD']
+    symbols = ['META']
     
     # Define date range - use historical data only
     start_date = datetime(2023, 1, 1, tzinfo=UTC)
